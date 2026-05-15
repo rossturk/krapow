@@ -69,6 +69,13 @@ func Build(targetAlias string) error {
 			deps, strings.Join(deps, " "))
 	}
 
+	// Prime sudo before the TUI takes over — distrobuilder needs root, and
+	// once bubbletea is running it captures stdin, so a sudo password prompt
+	// from inside the TUI is invisible and breaks the bake.
+	if err := primeSudo(); err != nil {
+		return err
+	}
+
 	runner := tui.New("bake "+targetAlias, []tui.PhaseSpec{
 		{ID: "iso", Label: "iso"},
 		{ID: "repack", Label: "repack"},
@@ -361,23 +368,32 @@ func buildAnswerISO(dst string, files ...string) error {
 
 // ---------- phase: install ----------
 
-func runInstall(name, repackedISO, virtioISO, answerISO string) error {
+// runInstall attaches install + answer ISOs as Incus `disk` devices and boots.
+//
+// KNOWN ISSUE: OVMF's SCSI CD-ROM probe times out on first boot, dropping
+// into its boot picker after cascading failures through HDD/PXE/HTTP-boot
+// entries. May require a VGA-console keypress or several minutes of waiting.
+//
+// Attempted fixes that DIDN'T work as of 2026-05-15:
+//   - raw.qemu with IDE -device: works for the boot, but Incus 7's QMP
+//     monitor handshake then fails on root/eth0 device add ("Failed
+//     adding NIC device" / "Failed adding block device"). Race between
+//     raw.qemu device IDs and Incus's monitor commands.
+//   - raw.apparmor to grant qemu read access to raw.qemu paths: required,
+//     but doesn't help with the monitor handshake conflict above.
+//
+// Real fix is its own project — likely needs Incus source-reading or
+// OVMF NVRAM pre-population. Tracked as a known limitation.
+func runInstall(name, repackedISO, _ /*virtioISO*/, answerISO string) error {
 	if err := runFG("incus", "init", name, "--vm", "--empty",
 		"-c", "security.secureboot=false",
 		"-c", "limits.cpu=4",
-		"-c", "limits.memory=4GiB"); err != nil {
+		"-c", "limits.memory=4GiB",
+		"-d", "root,size=60GiB"); err != nil {
 		return err
 	}
-	// (Tempting to disable the NIC during install to skip ~60-90s of OVMF
-	// PXE/HTTP-boot timeouts — but setup-ssh.ps1 needs network to fetch the
-	// OpenSSH FoD package from Microsoft Update. We pay the PXE delay so
-	// FirstLogonCommands can install OpenSSH on first boot.)
 	if err := runFG("incus", "config", "device", "add", name, "install", "disk",
 		"source="+repackedISO, "boot.priority=10"); err != nil {
-		return err
-	}
-	if err := runFG("incus", "config", "device", "add", name, "virtio", "disk",
-		"source="+virtioISO, "readonly=true"); err != nil {
 		return err
 	}
 	if err := runFG("incus", "config", "device", "add", name, "answer", "disk",
@@ -387,10 +403,6 @@ func runInstall(name, repackedISO, virtioISO, answerISO string) error {
 	if err := runFG("incus", "start", name); err != nil {
 		return err
 	}
-
-	// The bake is done when SSH answers. setup-ssh.ps1 installs OpenSSH and
-	// authorizes our pubkey at FirstLogon; if SSH is up, the post-install
-	// phase finished.
 	_, err := waitForSSH(name, 60*time.Minute)
 	return err
 }
@@ -497,8 +509,8 @@ func finalizeBake(r *tui.Runner, name, alias string) error {
 	r.End("sysprep", nil)
 
 	r.Start("publish")
-	r.Log("detaching bake-time devices (install, virtio, answer)")
-	for _, dev := range []string{"install", "virtio", "answer"} {
+	r.Log("detaching bake-time devices (install, answer)")
+	for _, dev := range []string{"install", "answer"} {
 		_ = runFG("incus", "config", "device", "remove", name, dev)
 	}
 	r.Log("incus publish %s --alias %s", name, alias)
@@ -518,7 +530,8 @@ func runFG(name string, args ...string) error {
 }
 
 // runAsRoot invokes a command as root, prepending `sudo` when we're not
-// already root.
+// already root. Assumes sudo credentials are already primed (see primeSudo)
+// so the subprocess doesn't trigger a password prompt under the TUI.
 func runAsRoot(name string, args ...string) error {
 	if os.Geteuid() == 0 {
 		return runFG(name, args...)
@@ -526,6 +539,34 @@ func runAsRoot(name string, args ...string) error {
 	if _, err := exec.LookPath("sudo"); err != nil {
 		return fmt.Errorf("%s requires root and sudo is not on PATH; rerun rowner as root", name)
 	}
-	fmt.Fprintf(bakeOut, "(running %s under sudo)\n", name)
-	return runFG("sudo", append([]string{name}, args...)...)
+	// -n: never prompt. If the prime expired, fail fast instead of hanging.
+	return runFG("sudo", append([]string{"-n", name}, args...)...)
+}
+
+// primeSudo calls `sudo -v` to refresh the user's sudo credential cache.
+// Called once before the TUI starts so the password prompt (if needed) is
+// visible to the user on a normal terminal. Subsequent `sudo -n` calls
+// from inside the TUI then succeed silently while the cache is valid
+// (typically 5-15 minutes — long enough for distrobuilder to finish).
+func primeSudo() error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	if _, err := exec.LookPath("sudo"); err != nil {
+		return nil // not on PATH; runAsRoot will error later with a clearer message
+	}
+	// Probe first — if cred is already cached, skip the user-visible prompt.
+	probe := exec.Command("sudo", "-n", "true")
+	if err := probe.Run(); err == nil {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "krapow: bake needs root for distrobuilder; priming sudo (you may be prompted)")
+	c := exec.Command("sudo", "-v")
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stderr
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("sudo prime failed: %w", err)
+	}
+	return nil
 }
