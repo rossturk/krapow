@@ -82,7 +82,7 @@ func Build(targetAlias string) error {
 		{ID: "answer", Label: "answer"},
 		{ID: "install", Label: "install"},
 		{ID: "toolchain", Label: "toolchain"},
-		{ID: "sysprep", Label: "sysprep"},
+		{ID: "shutdown", Label: "shutdown"},
 		{ID: "publish", Label: "publish"},
 	}, false)
 
@@ -127,7 +127,9 @@ func doBake(r *tui.Runner, targetAlias string) error {
 	if winISO == "" {
 		winISO = filepath.Join(cache, "windows-server-2022-eval.iso")
 		r.Log("Windows Server 2022 Eval → %s", winISO)
-		if err := ensureDownload(winISO, winISOURL, winISOSHA256); err != nil {
+		if err := ensureDownload(winISO, winISOURL, winISOSHA256, func(s string) {
+			r.SetDetail("iso", s)
+		}); err != nil {
 			r.End("iso", err)
 			return fmt.Errorf("download Windows ISO: %w", err)
 		}
@@ -136,7 +138,9 @@ func doBake(r *tui.Runner, targetAlias string) error {
 	}
 	virtioISO := filepath.Join(cache, "virtio-win.iso")
 	r.Log("virtio-win → %s", virtioISO)
-	if err := ensureDownload(virtioISO, virtioISOURL, ""); err != nil {
+	if err := ensureDownload(virtioISO, virtioISOURL, "", func(s string) {
+		r.SetDetail("iso", s)
+	}); err != nil {
 		r.End("iso", err)
 		return fmt.Errorf("download virtio-win ISO: %w", err)
 	}
@@ -255,7 +259,11 @@ func renderAsset(name, dst string, data any) error {
 
 // ensureDownload fetches `url` to `dst` if missing. If `wantSHA` is non-empty,
 // verifies it after download (or against the cached file on subsequent runs).
-func ensureDownload(dst, url, wantSHA string) error {
+// ensureDownload fetches `url` to `dst` if missing. onProgress (if non-nil)
+// is called ~once per second during the download with a human-readable
+// progress string suitable for an inline TUI status (e.g. "1.2 GiB / 5.3
+// GiB, 23% — 47 MiB/s"). Cleared (called with "") on completion.
+func ensureDownload(dst, url, wantSHA string, onProgress func(string)) error {
 	if fi, err := os.Stat(dst); err == nil && fi.Size() > 0 {
 		if wantSHA == "" {
 			fmt.Fprintf(bakeOut, "using cached %s\n", filepath.Base(dst))
@@ -292,8 +300,13 @@ func ensureDownload(dst, url, wantSHA string) error {
 			"https://www.microsoft.com/en-us/evalcenter/download-windows-server-2022",
 			resp.StatusCode, url)
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+
+	pw := &progressWriter{total: resp.ContentLength, started: time.Now(), onProgress: onProgress}
+	if _, err := io.Copy(io.MultiWriter(f, pw), resp.Body); err != nil {
 		return err
+	}
+	if onProgress != nil {
+		onProgress("")
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -309,6 +322,52 @@ func ensureDownload(dst, url, wantSHA string) error {
 		}
 	}
 	return os.Rename(tmp, dst)
+}
+
+// progressWriter is a sink io.Writer that consumes bytes without storing
+// them, calling onProgress periodically with a human-readable status.
+type progressWriter struct {
+	total      int64
+	done       int64
+	started    time.Time
+	lastReport time.Time
+	onProgress func(string)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	p.done += int64(len(b))
+	if p.onProgress == nil {
+		return len(b), nil
+	}
+	now := time.Now()
+	if now.Sub(p.lastReport) < time.Second {
+		return len(b), nil
+	}
+	p.lastReport = now
+	rate := float64(p.done) / now.Sub(p.started).Seconds()
+	var msg string
+	if p.total > 0 {
+		pct := float64(p.done) / float64(p.total) * 100
+		msg = fmt.Sprintf("%s / %s, %.0f%% — %s/s",
+			fmtBytes(p.done), fmtBytes(p.total), pct, fmtBytes(int64(rate)))
+	} else {
+		msg = fmt.Sprintf("%s — %s/s", fmtBytes(p.done), fmtBytes(int64(rate)))
+	}
+	p.onProgress(msg)
+	return len(b), nil
+}
+
+func fmtBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.0f MiB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.0f KiB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func sha256File(path string) (string, error) {
@@ -468,45 +527,39 @@ func installToolchain(name string) error {
 	return err
 }
 
-// ---------- phase: finalize (sysprep + publish) ----------
+// ---------- phase: finalize (shutdown + publish) ----------
+//
+// We deliberately do NOT run sysprep. Twice in development sysprep silently
+// failed during `Sysprep_Clean_Validate_Opk` and never shut the VM down,
+// leaving the bake hung. For ephemeral runners the trade-off is fine:
+//
+//   - Cloned runner VMs all share the same Windows SID and hostname
+//     (something like "WIN-XXXX"), but they're never AD-joined and GitHub
+//     identifies them by the krapow-given runner name, not Windows machine ID.
+//   - Skipping sysprep keeps the bake reliable. Cost is a slightly larger
+//     image (no /generalize cleanup of install caches) — measured at ~1-2 GB.
 
 func finalizeBake(r *tui.Runner, name, alias string) error {
-	r.Start("sysprep")
-	r.Log("sysprep.exe /generalize /oobe /shutdown")
-	privPath, _, err := sshkeys.EnsureKeyPair()
-	if err != nil {
-		r.End("sysprep", err)
+	r.Start("shutdown")
+	r.Log("incus stop --force %s (no sysprep — see comment)", name)
+	if err := runFG("incus", "stop", "--force", name); err != nil {
+		r.End("shutdown", err)
 		return err
 	}
-	ip := vmIPv4(name)
-	if ip == "" {
-		err := fmt.Errorf("VM %s has no IPv4; cannot sysprep over SSH", name)
-		r.End("sysprep", err)
-		return err
-	}
-	c, err := winssh.Dial(ip, privPath, 30*time.Second)
-	if err != nil {
-		r.End("sysprep", err)
-		return err
-	}
-	// Sysprep terminates SSH mid-command. Don't fail on connection-reset errors.
-	_, _ = c.Run(`C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm /quiet`)
-	c.Close()
-
-	r.Log("waiting for VM to power off (up to 15 min)")
-	deadline := time.Now().Add(15 * time.Minute)
+	// Confirm it actually stopped before we publish.
+	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		if incus.State(name) == "stopped" {
 			break
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 	if incus.State(name) != "stopped" {
-		err := fmt.Errorf("sysprep didn't shut down %s within 15 min", name)
-		r.End("sysprep", err)
+		err := fmt.Errorf("VM %s didn't reach stopped state within 2 min", name)
+		r.End("shutdown", err)
 		return err
 	}
-	r.End("sysprep", nil)
+	r.End("shutdown", nil)
 
 	r.Start("publish")
 	r.Log("detaching bake-time devices (install, answer)")
@@ -514,7 +567,7 @@ func finalizeBake(r *tui.Runner, name, alias string) error {
 		_ = runFG("incus", "config", "device", "remove", name, dev)
 	}
 	r.Log("incus publish %s --alias %s", name, alias)
-	err = runFG("incus", "publish", name, "--alias", alias)
+	err := runFG("incus", "publish", name, "--alias", alias)
 	r.End("publish", err)
 	return err
 }

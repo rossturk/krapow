@@ -280,12 +280,15 @@ func doInitLinux(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 func doInitWindows(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 	r.Start("launch")
 	r.Log("incus launch %s %s --vm", windowsImage, ic.name)
-	r.Log("  cpus=4  memory=8GiB  root=30GiB")
+	r.Log("  cpus=4  memory=8GiB  root=60GiB")
+	// Must be >= the published base image's disk size (60 GiB — set in the
+	// bake VM). Cloning into a smaller volume fails with "Source image size
+	// exceeds specified volume size".
 	err := incus.LaunchVM(windowsImage, ic.name, map[string]string{
 		"security.secureboot": "false",
 		"limits.cpu":          "4",
 		"limits.memory":       "8GiB",
-	}, map[string]string{"root.size": "30GiB"})
+	}, map[string]string{"root.size": "60GiB"})
 	if err == nil {
 		r.Log("VM started; writing state file")
 		err = state.Save(state.Runner{

@@ -153,6 +153,17 @@ func (r *Runner) Log(format string, args ...any) {
 	r.prog.Send(logMsg{line: line})
 }
 
+// SetDetail updates the inline status shown beside the active phase in the
+// header box (e.g. "1.2 GiB / 5.3 GiB, 23%"). Empty string clears it.
+// Useful for live progress that should overwrite in place rather than scroll.
+func (r *Runner) SetDetail(phaseID, detail string) {
+	if r.plain {
+		fmt.Fprintf(os.Stderr, "      [%s] %s\n", phaseID, detail)
+		return
+	}
+	r.prog.Send(detailMsg{id: phaseID, detail: detail})
+}
+
 // Finish concludes the run and tears down the TUI.
 func (r *Runner) Finish(err error) {
 	if r.plain {
@@ -189,6 +200,7 @@ type phaseState struct {
 	status  status
 	elapsed time.Duration
 	err     error
+	detail  string // inline status (e.g. download progress); cleared on phase end
 }
 
 type model struct {
@@ -208,8 +220,9 @@ type (
 		elapsed time.Duration
 		err     error
 	}
-	logMsg  struct{ line string }
-	doneMsg struct{ err error }
+	logMsg    struct{ line string }
+	detailMsg struct{ id, detail string }
+	doneMsg   struct{ err error }
 )
 
 func (m *model) Init() tea.Cmd { return m.spinner.Tick }
@@ -230,11 +243,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.phases[i].spec.ID == msg.id {
 				m.phases[i].elapsed = msg.elapsed
 				m.phases[i].err = msg.err
+				m.phases[i].detail = "" // clear any inline progress on phase end
 				if msg.err != nil {
 					m.phases[i].status = statusError
 				} else {
 					m.phases[i].status = statusDone
 				}
+				break
+			}
+		}
+	case detailMsg:
+		for i := range m.phases {
+			if m.phases[i].spec.ID == msg.id {
+				m.phases[i].detail = msg.detail
 				break
 			}
 		}
@@ -260,7 +281,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() string {
-	// Render phase line: marker + label, space-separated.
+	// Render phase line: marker + label, plus optional detail in parens.
 	var phaseCells []string
 	for _, p := range m.phases {
 		marker := pendingMarker
@@ -272,7 +293,11 @@ func (m *model) View() string {
 		case statusError:
 			marker = errorMarker
 		}
-		phaseCells = append(phaseCells, marker+" "+p.spec.Label)
+		cell := marker + " " + p.spec.Label
+		if p.status == statusRunning && p.detail != "" {
+			cell += " " + detailStyle.Render("("+p.detail+")")
+		}
+		phaseCells = append(phaseCells, cell)
 	}
 	header := fmt.Sprintf("krapow init %s   %s", m.title, fmtDur(time.Since(m.startAt)))
 
@@ -298,6 +323,7 @@ var (
 	doneMarker    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓")
 	errorMarker   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗")
 	pendingMarker = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("◯")
+	detailStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
 	logStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	boxStyle      = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
