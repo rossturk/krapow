@@ -26,6 +26,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/rossturk/krapow/internal/incus"
 	"github.com/rossturk/krapow/internal/sshkeys"
 	"github.com/rossturk/krapow/internal/tui"
@@ -50,6 +51,45 @@ const (
 	virtioISOURL = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
 )
 
+// acquireBakeLock takes an exclusive flock on ~/.krapow/bake.lock. If another
+// process already holds it (another bake running), returns a typed error that
+// names the holder so the user knows what to wait for or kill.
+//
+// The lock file content is "<pid> <ISO timestamp> <target alias>" written
+// once on acquire; we read it before TryLock when reporting "already held"
+// so the error names the running invocation. flock is released automatically
+// when the process exits, so a hard-killed bake doesn't leave a stale lock.
+func acquireBakeLock(targetAlias string) (*flock.Flock, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(home, ".krapow")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "bake.lock")
+	lock := flock.New(path)
+	got, err := lock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("acquire bake lock %s: %w", path, err)
+	}
+	if !got {
+		// Best-effort read of the holder's metadata for a friendlier error.
+		holder := "unknown"
+		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+			holder = strings.TrimSpace(string(b))
+		}
+		return nil, fmt.Errorf("another krapow bake is in progress (%s); wait for it to finish, or check `ps -ef | grep krapow`", holder)
+	}
+	// We hold the lock; record who we are so the next bake's error message
+	// can name us.
+	meta := fmt.Sprintf("pid=%d started=%s target=%s\n",
+		os.Getpid(), time.Now().Format(time.RFC3339), targetAlias)
+	_ = os.WriteFile(path, []byte(meta), 0o644)
+	return lock, nil
+}
+
 // MissingDeps lists host commands the build needs that aren't on PATH.
 func MissingDeps() []string {
 	var missing []string
@@ -63,11 +103,25 @@ func MissingDeps() []string {
 
 // Build runs the full pipeline and ends with `targetAlias` pointing at the new
 // base image. Idempotent against the cached ISOs (re-downloads only on miss).
+//
+// Holds an exclusive flock on ~/.krapow/bake.lock for the duration of the
+// build so two concurrent `krapow init win`/`just rebake` invocations can't
+// trample each other's work dir, fight over a bake-VM name, or saturate the
+// host with two parallel Windows installs.
 func Build(targetAlias string) error {
 	if deps := MissingDeps(); len(deps) > 0 {
 		return fmt.Errorf("missing host deps: %v (sudo apt install -y %s)",
 			deps, strings.Join(deps, " "))
 	}
+
+	lock, err := acquireBakeLock(targetAlias)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+		_ = os.Remove(lock.Path()) // remove metadata file when we release
+	}()
 
 	// Prime sudo before the TUI takes over — distrobuilder needs root, and
 	// once bubbletea is running it captures stdin, so a sudo password prompt
@@ -541,23 +595,50 @@ func installToolchain(name string) error {
 
 func finalizeBake(r *tui.Runner, name, alias string) error {
 	r.Start("shutdown")
-	r.Log("incus stop --force %s (no sysprep — see comment)", name)
-	if err := runFG("incus", "stop", "--force", name); err != nil {
+	// Graceful shutdown is REQUIRED, not a nicety. `incus stop --force` is
+	// equivalent to pulling the plug — Windows doesn't get to flush the
+	// registry, and machine-PATH updates from chocolatey / Git for Windows
+	// (written by install-toolchain.ps1) end up only in memory. The image
+	// then captures a disk where the .exes are present but PATH still points
+	// at System32 only, so workflows like dtolnay/rust-toolchain fail with
+	// "bash: command not found" even though git.exe is sitting there.
+	r.Log("sending Windows graceful shutdown via SSH (flushes registry)")
+	privPath, _, err := sshkeys.EnsureKeyPair()
+	if err != nil {
 		r.End("shutdown", err)
 		return err
 	}
-	// Confirm it actually stopped before we publish.
-	deadline := time.Now().Add(2 * time.Minute)
+	ip := vmIPv4(name)
+	if ip == "" {
+		err := fmt.Errorf("bake VM %s has no IPv4; cannot graceful-shutdown", name)
+		r.End("shutdown", err)
+		return err
+	}
+	c, err := winssh.Dial(ip, privPath, 30*time.Second)
+	if err != nil {
+		r.End("shutdown", err)
+		return err
+	}
+	// shutdown /s /t 0 — initiate immediate clean shutdown; Windows takes ~30s
+	// to actually power off. SSH session disconnects mid-command (expected).
+	_, _ = c.RunPowerShell(`shutdown /s /t 0 /f`)
+	c.Close()
+
+	r.Log("waiting up to 5 min for VM to power off cleanly")
+	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		if incus.State(name) == "stopped" {
 			break
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
 	if incus.State(name) != "stopped" {
-		err := fmt.Errorf("VM %s didn't reach stopped state within 2 min", name)
-		r.End("shutdown", err)
-		return err
+		// Fall through to force-stop, but warn — image may have stale PATH.
+		r.Log("graceful shutdown didn't complete in 5 min; force-stopping (image may have stale Machine PATH)")
+		if err := runFG("incus", "stop", "--force", name); err != nil {
+			r.End("shutdown", err)
+			return err
+		}
 	}
 	r.End("shutdown", nil)
 
@@ -567,7 +648,7 @@ func finalizeBake(r *tui.Runner, name, alias string) error {
 		_ = runFG("incus", "config", "device", "remove", name, dev)
 	}
 	r.Log("incus publish %s --alias %s", name, alias)
-	err := runFG("incus", "publish", name, "--alias", alias)
+	err = runFG("incus", "publish", name, "--alias", alias)
 	r.End("publish", err)
 	return err
 }

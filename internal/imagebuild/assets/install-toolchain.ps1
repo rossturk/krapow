@@ -66,4 +66,24 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     if ($LASTEXITCODE -ne 0) { throw "choco install git failed: exit $LASTEXITCODE" }
 }
 
+# ---------- Machine PATH belt-and-suspenders ----------
+# The chocolatey and git installers each write to HKLM\...\Environment\Path.
+# Registry writes are lazy on Windows; if we power-off the bake VM before
+# they're flushed (force-stop, BSOD, etc.), the image captures binaries on
+# disk without the PATH update. Explicitly normalize PATH here so even an
+# unflushed installer doesn't bite us.
+$wantOnPath = @(
+    'C:\ProgramData\chocolatey\bin',
+    'C:\Program Files\Git\cmd',
+    'C:\Program Files\Git\bin'
+)
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+foreach ($p in $wantOnPath) {
+    if ($machinePath -notlike "*$p*") {
+        $machinePath = "$machinePath;$p"
+        Write-Host "added to machine PATH: $p"
+    }
+}
+[Environment]::SetEnvironmentVariable('Path', $machinePath, 'Machine')
+
 Write-Host "krapow toolchain installed"
