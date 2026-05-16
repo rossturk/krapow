@@ -3,12 +3,9 @@ package incus
 import (
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // SpamEnter attaches to a VM's serial console and writes "\r" once per second
@@ -75,29 +72,6 @@ func SpamEnter(name string, duration time.Duration) error {
 
 // openPTY allocates a new pseudoterminal and returns (master, slave). The
 // caller passes `slave` to a child process's stdio and writes/reads via
-// `master`. Caller is responsible for closing both files.
-func openPTY() (*os.File, *os.File, error) {
-	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open /dev/ptmx: %w", err)
-	}
-	// Unlock the slave side so we can open /dev/pts/N.
-	if err := unix.IoctlSetPointerInt(mfd, unix.TIOCSPTLCK, 0); err != nil {
-		_ = unix.Close(mfd)
-		return nil, nil, fmt.Errorf("TIOCSPTLCK: %w", err)
-	}
-	n, err := unix.IoctlGetInt(mfd, unix.TIOCGPTN)
-	if err != nil {
-		_ = unix.Close(mfd)
-		return nil, nil, fmt.Errorf("TIOCGPTN: %w", err)
-	}
-	slavePath := fmt.Sprintf("/dev/pts/%d", n)
-	sfd, err := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY, 0)
-	if err != nil {
-		_ = unix.Close(mfd)
-		return nil, nil, fmt.Errorf("open %s: %w", slavePath, err)
-	}
-	return os.NewFile(uintptr(mfd), "ptmx"),
-		os.NewFile(uintptr(sfd), slavePath),
-		nil
-}
+// `master`. Caller is responsible for closing both files. Linux-only — the
+// non-Linux stub returns an error so SpamEnter degrades gracefully (Incus
+// bakes only run on Linux hosts in practice).
