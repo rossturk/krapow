@@ -18,6 +18,9 @@ packages:
   - tar
   - sudo
   - ca-certificates
+  # archive utilities — workflows routinely unpack release zips
+  - zip
+  - unzip
   # universal C toolchain — every compiled language needs this to link
   - build-essential
   - pkg-config
