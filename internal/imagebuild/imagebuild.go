@@ -481,43 +481,102 @@ func buildAnswerISO(dst string, files ...string) error {
 
 // ---------- phase: install ----------
 
-// runInstall attaches install + answer ISOs as Incus `disk` devices and boots.
+// runInstall builds the bake VM with the Incus device profile cribbed from
+// antifob/incus-windows (tools/pack.sh) and boots it into Windows Setup.
 //
-// KNOWN ISSUE: OVMF's SCSI CD-ROM probe times out on first boot, dropping
-// into its boot picker after cascading failures through HDD/PXE/HTTP-boot
-// entries. May require a VGA-console keypress or several minutes of waiting.
+// Why this shape: Incus's default `disk` device wires VM CD-ROMs to
+// virtio-scsi. OVMF probes virtio-scsi by walking LUNs with a long per-slot
+// timeout; if it stalls, it falls through HDD → PXE → HTTP-Boot and lands
+// in its boot picker, leaving the install hung at the firmware menu until
+// someone connects via VGA and hits Enter. We avoid that probe entirely by
+// attaching both ISOs as IDE CD-ROMs via raw.qemu — OVMF enumerates IDE
+// immediately, and boot.priority=10 on the `install` device makes it the
+// first boot entry so the VM boots straight into Windows Setup.
 //
-// Attempted fixes that DIDN'T work as of 2026-05-15:
-//   - raw.qemu with IDE -device: works for the boot, but Incus 7's QMP
-//     monitor handshake then fails on root/eth0 device add ("Failed
-//     adding NIC device" / "Failed adding block device"). Race between
-//     raw.qemu device IDs and Incus's monitor commands.
-//   - raw.apparmor to grant qemu read access to raw.qemu paths: required,
-//     but doesn't help with the monitor handshake conflict above.
+// Specifics:
+//   - image.os=windows: tells Incus to use Windows-appropriate device
+//     defaults (most notably, keeps it from auto-attaching devices that
+//     conflict with our raw.qemu drives).
+//   - root io.bus=virtio-blk: pairs with the virtio drivers distrobuilder
+//     injected during repack and keeps the root disk off the virtio-scsi
+//     controller, so it doesn't share a bus (and a probe order) with CDs.
+//   - install disk + boot.priority=10: same path as one of the raw.qemu
+//     IDE drives. The `disk` device exists only so Incus writes the right
+//     OVMF NVRAM boot entry; the bytes Windows actually reads come from
+//     the IDE drive raw.qemu attached.
+//   - incusagent: the standard `agent:config` device for Windows VMs;
+//     harmless during install, used by post-install tooling.
+//   - raw.apparmor: extends qemu's MAC profile so it can read the ISO
+//     paths we point raw.qemu at (Incus only auto-grants paths it manages).
+//   - raw.qemu: -drive ... if=ide for both ISOs. We deliberately use the
+//     simple `-drive` form rather than `-device ide-cd,drive=…` — an
+//     earlier attempt used the latter and hit a QMP race where Incus's
+//     monitor commands collided with raw.qemu's explicit device IDs
+//     ("Failed adding NIC device" / "Failed adding block device"). The
+//     `-drive if=ide` form lets qemu auto-create the IDE controller and
+//     attach the drive without naming an ID that Incus can collide with.
 //
-// Real fix is its own project — likely needs Incus source-reading or
-// OVMF NVRAM pre-population. Tracked as a known limitation.
+// Reference: https://github.com/antifob/incus-windows tools/pack.sh
 func runInstall(name, repackedISO, _ /*virtioISO*/, answerISO string) error {
 	if err := runFG("incus", "init", name, "--vm", "--empty",
 		"-c", "security.secureboot=false",
+		"-c", "image.os=windows",
 		"-c", "limits.cpu=4",
 		"-c", "limits.memory=4GiB",
 		"-d", "root,size=60GiB"); err != nil {
+		return err
+	}
+	if err := runFG("incus", "config", "device", "set", name, "root",
+		"io.bus=virtio-blk"); err != nil {
 		return err
 	}
 	if err := runFG("incus", "config", "device", "add", name, "install", "disk",
 		"source="+repackedISO, "boot.priority=10"); err != nil {
 		return err
 	}
-	if err := runFG("incus", "config", "device", "add", name, "answer", "disk",
-		"source="+answerISO, "readonly=true"); err != nil {
+	if err := runFG("incus", "config", "device", "add", name, "incusagent", "disk",
+		"source=agent:config"); err != nil {
+		return err
+	}
+	apparmor := fmt.Sprintf("%s rwk,\n%s rwk,\n", repackedISO, answerISO)
+	if err := incusSetStdin(name, "raw.apparmor", apparmor); err != nil {
+		return err
+	}
+	// raw.qemu has to go through stdin: passing `-drive …` as an argv value
+	// trips Cobra's flag parser ("unknown shorthand flag: 'd'"), even when
+	// the leading `--` separator is present. Matches antifob/pack.sh exactly.
+	rawQemu := fmt.Sprintf(
+		"-drive file=%s,index=0,media=cdrom,if=ide -drive file=%s,index=1,media=cdrom,if=ide",
+		repackedISO, answerISO)
+	if err := incusSetStdin(name, "raw.qemu", rawQemu); err != nil {
 		return err
 	}
 	if err := runFG("incus", "start", name); err != nil {
 		return err
 	}
+	// Push past OVMF's Boot Manager. Incus writes NVRAM entries only for the
+	// devices it manages (virtio-scsi CDs + HDD + PXE); the IDE CDs we added
+	// via raw.qemu are attached but unenumerated in NVRAM, so OVMF burns the
+	// virtio-scsi probe timeout, fails through PXE, and lands in the firmware
+	// menu — where the auto-discovered IDE CDs are listed and waiting for a
+	// keypress. Spamming Enter on the serial console for ~3 minutes covers
+	// the full timeout-cascade window and selects whatever boot entry the
+	// menu highlights first. Mirrors antifob/incus-windows tools/click.py.
+	go func() { _ = incus.SpamEnter(name, 3*time.Minute) }()
+
 	_, err := waitForSSH(name, 60*time.Minute)
 	return err
+}
+
+// incusSetStdin runs `incus config set <name> <key> -` with `value` piped in
+// on stdin. Used for multi-line config values (raw.apparmor) where the CLI
+// expects content via stdin rather than as an argv string.
+func incusSetStdin(name, key, value string) error {
+	c := exec.Command("incus", "config", "set", name, key, "-")
+	c.Stdin = strings.NewReader(value)
+	c.Stdout = bakeOut
+	c.Stderr = bakeErr
+	return c.Run()
 }
 
 // waitForSSH polls the VM until DHCP gives it an IPv4 AND SSH accepts our key.
@@ -643,10 +702,14 @@ func finalizeBake(r *tui.Runner, name, alias string) error {
 	r.End("shutdown", nil)
 
 	r.Start("publish")
-	r.Log("detaching bake-time devices (install, answer)")
-	for _, dev := range []string{"install", "answer"} {
+	r.Log("detaching bake-time devices (install, incusagent) and raw.qemu CDs")
+	for _, dev := range []string{"install", "incusagent"} {
 		_ = runFG("incus", "config", "device", "remove", name, dev)
 	}
+	// Clear raw.qemu / raw.apparmor so they don't point at host paths that
+	// won't exist on whoever imports the published image.
+	_ = runFG("incus", "config", "unset", name, "raw.qemu")
+	_ = runFG("incus", "config", "unset", name, "raw.apparmor")
 	r.Log("incus publish %s --alias %s", name, alias)
 	err = runFG("incus", "publish", name, "--alias", alias)
 	r.End("publish", err)

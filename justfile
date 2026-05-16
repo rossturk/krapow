@@ -69,4 +69,4 @@ clean-bakes:
 # refresh the bake (deletes the published image + re-runs the full bake)
 rebake: build clean-bakes
     incus image delete win-runner-base 2>/dev/null || true
-    ./krapow init win -y
+    ./krapow bake

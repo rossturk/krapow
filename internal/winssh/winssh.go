@@ -8,7 +8,9 @@ package winssh
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -86,33 +88,92 @@ func (c *Client) Run(cmd string) (string, error) {
 	return combined.String(), err
 }
 
-// RunPowerShell runs a PowerShell script on the remote. We pass the script via
-// -EncodedCommand (UTF-16LE base64) so backticks, line continuations, single
-// and double quotes, $vars — none of it has to be escaped for the shell.
-//
-// Flags:
+// encodedCmdLimit is a conservative cap on the encoded-command size we'll
+// send via `powershell -EncodedCommand`. Windows CreateProcess limits
+// lpCommandLine to ~32 KB, and sshd-on-Windows wraps the command in its
+// default shell which adds overhead. Headroom of ~8 KB keeps us safe.
+const encodedCmdLimit = 24 * 1024
+
+// chunkSize is the raw script chunk size when uploading scripts that exceed
+// encodedCmdLimit. After the AppendAllBytes wrapper plus base64 plus UTF-16LE
+// re-encoding, 6 KB raw stays comfortably under encodedCmdLimit.
+const chunkSize = 6 * 1024
+
+// psFlags are the standard powershell.exe flags we use for every invocation.
 //
 //	-NonInteractive    don't prompt for any input
 //	-OutputFormat Text suppress CLIXML serialization (otherwise every Write-Host
 //	                   and progress event gets framed as <Objs ...> XML which
 //	                   floods the terminal — see PowerShell-over-SSH protocol).
+const psFlags = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text"
+
+// RunPowerShell runs a PowerShell script on the remote. Scripts that fit
+// inside encodedCmdLimit when UTF-16LE+base64-encoded are sent inline via
+// `-EncodedCommand`; larger scripts are uploaded in chunks to a temp file
+// and executed with `-File <path>`.
+//
+// We deliberately do NOT use `-File -` (read script from stdin). On
+// sshd-for-Windows, the SSH stdin EOF doesn't propagate through the default
+// shell wrapper to the inner powershell process, so `-File -` blocks
+// indefinitely after the script is sent.
 func (c *Client) RunPowerShell(script string) (string, error) {
-	return c.Run(
-		"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass " +
-			"-OutputFormat Text -EncodedCommand " + encodePowerShell(script),
+	encoded := encodePowerShell(script)
+	if len(encoded) <= encodedCmdLimit {
+		return c.Run("powershell " + psFlags + " -EncodedCommand " + encoded)
+	}
+	return c.runPowerShellViaTempFile(script)
+}
+
+// runPowerShellViaTempFile uploads the script in chunks to a unique remote
+// temp file, executes it with `-File`, and removes the file regardless of
+// outcome. Each chunk's upload command stays well under encodedCmdLimit so
+// the recursion into RunPowerShell always lands in the inline path.
+func (c *Client) runPowerShellViaTempFile(script string) (string, error) {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("nonce: %w", err)
+	}
+	remotePath := `C:\Windows\Temp\krapow-` + hex.EncodeToString(nonce[:]) + `.ps1`
+
+	// Prepend a UTF-8 BOM. Windows PowerShell 5.1 reads BOM-less .ps1 files
+	// as Windows-1252 / system codepage, which mangles multi-byte UTF-8
+	// sequences (em-dashes, smart quotes, etc.) into garbage tokens that
+	// produce confusing parser errors far from the actual character.
+	raw := append([]byte{0xEF, 0xBB, 0xBF}, []byte(script)...)
+	for off := 0; off < len(raw); off += chunkSize {
+		end := off + chunkSize
+		if end > len(raw) {
+			end = len(raw)
+		}
+		b64 := base64.StdEncoding.EncodeToString(raw[off:end])
+		// AppendAllBytes is .NET 6+; Windows PowerShell 5.1 ships .NET Framework
+		// 4.x which doesn't have it. Use a FileStream in Append mode instead.
+		upload := fmt.Sprintf(
+			`$b=[System.Convert]::FromBase64String('%s'); $f=[System.IO.File]::Open('%s','Append','Write'); try { $f.Write($b,0,$b.Length) } finally { $f.Close() }`,
+			b64, remotePath,
+		)
+		if _, err := c.RunPowerShell(upload); err != nil {
+			// best-effort cleanup; ignore error since the file may not exist
+			_, _ = c.RunPowerShell(fmt.Sprintf(`Remove-Item -Force '%s' -ErrorAction SilentlyContinue`, remotePath))
+			return "", fmt.Errorf("upload chunk at offset %d: %w", off, err)
+		}
+	}
+
+	run := fmt.Sprintf(
+		`try { & powershell %s -File '%s'; exit $LASTEXITCODE } finally { Remove-Item -Force '%s' -ErrorAction SilentlyContinue }`,
+		psFlags, remotePath, remotePath,
 	)
+	return c.RunPowerShell(run)
 }
 
 // encodePowerShell returns the script encoded as PowerShell's -EncodedCommand
 // expects: UTF-16LE bytes, base64-standard, no padding stripped.
 func encodePowerShell(script string) string {
-	// UTF-16LE
 	u16 := make([]byte, 0, len(script)*2)
 	for _, r := range script {
 		if r < 0x10000 {
 			u16 = append(u16, byte(r), byte(r>>8))
 		} else {
-			// surrogate pair
 			r -= 0x10000
 			hi := 0xD800 + (r >> 10)
 			lo := 0xDC00 + (r & 0x3FF)
