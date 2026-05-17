@@ -44,16 +44,15 @@ Classic PATs need the `repo` scope. Fine-grained PATs need **Administration: rea
 
 ## Install
 
-### Homebrew (macOS, Linux)
+### Homebrew
 
 ```sh
-brew tap rossturk/krapow
+brew tap cirruslabs/cli      # provides tart (krapow's macOS VM backend)
+brew tap rossturk/krapow     # provides the krapow formula
 brew install krapow
 ```
 
-After the one-time tap, `brew upgrade krapow` and `brew uninstall krapow` work as expected. If you'd rather skip the tap step, the equivalent one-liner is `brew install rossturk/krapow/krapow`.
-
-On macOS this also pulls in `tart` automatically. Linux users still need to install `incus` via apt — `krapow doctor` will tell you what's missing.
+Two taps because Homebrew won't auto-add a tap declared as a dependency — you have to opt in to cirruslabs/cli explicitly. After this, `brew upgrade krapow` and `brew uninstall krapow` work as expected. Linux hosts use Incus instead of tart; install it via apt — `krapow doctor` will guide you.
 
 ### curl | bash
 
