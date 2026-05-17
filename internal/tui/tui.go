@@ -213,13 +213,13 @@ type phaseState struct {
 }
 
 type model struct {
-	title    string
-	phases   []phaseState
-	spinner  spinner.Model
-	log      []string
-	startAt  time.Time
-	done     bool
-	doneErr  error
+	title   string
+	phases  []phaseState
+	spinner spinner.Model
+	log     []string
+	startAt time.Time
+	done    bool
+	doneErr error
 }
 
 type (

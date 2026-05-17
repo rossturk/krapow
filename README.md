@@ -7,7 +7,7 @@
 
 The holy basil CLI.
 
-# Krapow - Easy GitHub Actions Runner VMs
+# Krapow: Easy GitHub Actions Runner VMs
 
 GitHub Actions self-hosted runners in ephemeral VMs — Linux and Windows via [Incus](https://linuxcontainers.org/incus/), macOS and Linux ARM via [Tart](https://tart.run/). One command builds a VM and registers it as a runner against your repo.
 
@@ -23,14 +23,20 @@ One set of commands keeps it all running.
 
 ## Requirements
 
-| Host OS | Backend | Needs |
-| --- | --- | --- |
-| Linux | Incus | `incus` on PATH, your user in the `incus-admin` group |
-| Linux | — | `sshpass` (for Windows VM provisioning over WinRM-less SSH) |
-| macOS | Tart | `tart` on PATH (`brew install cirruslabs/cli/tart`) |
-| Any | — | A GitHub token with runner-admin scope on the target repo |
+Always:
 
-Run `krapow doctor` to check everything is wired up.
+- A GitHub token with `repo` scope (classic PAT) or **Administration: read & write** (fine-grained PAT) on the target repo — `gh auth token` is fine too.
+
+On a Linux host:
+
+- `incus` on PATH and your user in the `incus-admin` group (used for both Linux and Windows runner VMs)
+- `sshpass` (only if you'll spawn Windows runners — the Windows image accepts password auth before krapow installs its SSH key)
+
+On a macOS host:
+
+- `tart` on PATH (`brew install cirruslabs/cli/tart`) — used for both macOS and Linux-ARM runner VMs
+
+Run `krapow doctor` any time to check what's missing.
 
 ### GitHub token
 
@@ -52,7 +58,9 @@ brew tap rossturk/krapow     # provides the krapow formula
 brew install krapow
 ```
 
-Two taps because Homebrew won't auto-add a tap declared as a dependency — you have to opt in to cirruslabs/cli explicitly. After this, `brew upgrade krapow` and `brew uninstall krapow` work as expected. Linux hosts use Incus instead of tart; install it via apt — `krapow doctor` will guide you.
+Two taps because Homebrew won't auto-add a tap declared as a dependency — you have to opt in to cirruslabs/cli explicitly. After this, `brew upgrade krapow` and `brew uninstall krapow` work as expected.
+
+Linux hosts use Incus, which isn't in Homebrew — install it from your distro (`apt install incus` on Ubuntu/Debian). `krapow doctor` will tell you exactly what's missing.
 
 ### curl | bash
 
@@ -65,6 +73,8 @@ curl -fsSL https://raw.githubusercontent.com/rossturk/krapow/main/install.sh | b
 Override the install location with `KRAPOW_INSTALL_DIR=/usr/local/bin` (the script will use `install -m 0755`, so write permission is on you).
 
 ### From source
+
+Needs Go 1.25+ and [`just`](https://github.com/casey/just).
 
 ```sh
 # build into ./krapow
@@ -89,7 +99,7 @@ krapow init mac --repo owner/name
 
 Each `init` boots a VM, installs the GitHub Actions runner, registers it against `--repo`, and starts it as a service. The runner name defaults to `<platform>-runner-<6 random chars>`; override with `--name`.
 
-When you're done:
+Day to day:
 
 ```sh
 krapow status                       # list managed runners + their VM/GitHub state
@@ -123,7 +133,7 @@ Every `init` subcommand accepts:
 
 ## Configuration
 
-Image sources can be overridden via environment variables:
+VM image sources can be overridden via environment variables when the defaults don't fit (different Ubuntu release, internal mirror, pinned macOS version, etc.):
 
 | Variable | Default |
 | --- | --- |
@@ -132,19 +142,27 @@ Image sources can be overridden via environment variables:
 | `KRAPOW_WIN_IMAGE` | `local:win-runner-base` |
 | `KRAPOW_MAC_IMAGE` | `ghcr.io/cirruslabs/macos-sequoia-xcode:latest` |
 
-State lives under `~/.krapow/state/` (one JSON file per runner). The Windows base image is published into the local Incus image store as `win-runner-base`.
+The `install.sh` curl|bash installer also honors `KRAPOW_INSTALL_DIR` (default `~/.local/bin`).
+
+State lives under `~/.krapow/state/` — one JSON file per runner. The Windows base image is published into the local Incus image store as `win-runner-base`.
 
 ## How it works
 
-`krapow init` runs a sequence of named phases — image pull, VM launch, provisioning, runner install, GitHub registration — surfaced live in a TUI. The Windows path additionally goes through a `bake` step that downloads the Windows Server eval ISO, runs an unattended install, applies virtio drivers, sysprep's, and publishes the result as a reusable Incus image. See [`docs/flows.html`](docs/flows.html) for the full state-flow diagram.
+`krapow init` runs a sequence of named phases — image pull, VM launch, provisioning, runner install, GitHub registration — surfaced live in a TUI (or as plain text under `--plain` / when stdout isn't a terminal). The Windows path additionally goes through a `bake` step that downloads the Windows Server 2022 eval ISO, runs an unattended install, applies virtio drivers, runs sysprep, and publishes the result as a reusable Incus image. See [`docs/flows.html`](docs/flows.html) for the full state-flow diagram.
 
 ## Development
 
 ```sh
-just            # list recipes
-just test       # go test ./...
-just lint       # go vet + gofmt check
-just doctor     # build and run preflight diagnostics
-just rebake     # nuke + rebuild the Windows base image
-just destroy-all   # tear down every krapow-managed runner
+just              # list all recipes
+just test         # go test ./...
+just lint         # go vet + gofmt check
+just doctor       # build and run preflight diagnostics
+just rebake       # nuke + rebuild the Windows base image (~45–90 min)
+just destroy-all  # tear down every krapow-managed runner
 ```
+
+`just linux owner/name`, `just win owner/name`, `just mac owner/name` are convenience shortcuts for `krapow init`. `just destroy <name>` mirrors `krapow destroy`.
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE).

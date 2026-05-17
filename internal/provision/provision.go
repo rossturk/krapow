@@ -27,9 +27,9 @@ type Vars struct {
 	Labels   string
 }
 
-func LinuxCloudInit(v Vars) (string, error)   { return render(linuxTpl, v) }
-func WindowsPS1(v Vars) (string, error)       { return render(windowsTpl, v) }
-func MacProvision(v Vars) (string, error)     { return render(macTpl, v) }
+func LinuxCloudInit(v Vars) (string, error)    { return render(linuxTpl, v) }
+func WindowsPS1(v Vars) (string, error)        { return render(windowsTpl, v) }
+func MacProvision(v Vars) (string, error)      { return render(macTpl, v) }
 func LinuxARMProvision(v Vars) (string, error) { return render(linuxARMTpl, v) }
 
 func render(tpl string, v Vars) (string, error) {

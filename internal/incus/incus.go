@@ -82,9 +82,9 @@ func State(name string) string {
 	return "absent"
 }
 
-func Start(name string) error   { return runStream("start", name) }
-func Stop(name string) error    { return runStream("stop", name) }
-func Delete(name string) error  { return runStream("delete", "--force", name) }
+func Start(name string) error  { return runStream("start", name) }
+func Stop(name string) error   { return runStream("stop", name) }
+func Delete(name string) error { return runStream("delete", "--force", name) }
 func Exec(name string, args ...string) error {
 	return runStream(append([]string{"exec", name, "--"}, args...)...)
 }

@@ -31,21 +31,21 @@ lint:
 doctor: build
     ./krapow doctor
 
-# print rowner runner state
+# print krapow runner state
 status: build
     ./krapow status
 
-# spawn a fresh Linux runner
-linux: build
-    ./krapow init linux
+# spawn a fresh Linux runner against owner/name
+linux repo: build
+    ./krapow init linux --repo {{repo}}
 
-# spawn a fresh Windows runner (auto-bakes base image on first run)
-win: build
-    ./krapow init win
+# spawn a fresh Windows runner against owner/name (auto-bakes base image on first run)
+win repo: build
+    ./krapow init win --repo {{repo}}
 
-# spawn a fresh macOS runner (macOS hosts only; uses tart)
-mac: build
-    ./krapow init mac
+# spawn a fresh macOS runner against owner/name (macOS hosts only; uses tart)
+mac repo: build
+    ./krapow init mac --repo {{repo}}
 
 # destroy a runner by name (tab-completes via shell completion if installed)
 destroy name: build
