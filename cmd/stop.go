@@ -50,7 +50,7 @@ func completeRunnerNames(cmd *cobra.Command, args []string, toComplete string) (
 	for _, r := range runners {
 		// Each completion entry can optionally include a description after a tab.
 		// Some shells (zsh, fish) display it; bash ignores it.
-		out = append(out, r.Name+"\t"+r.Kind+" runner ("+r.Repo+")")
+		out = append(out, r.Name+"\t"+r.Kind+" runner ("+r.EffectiveScope()+":"+r.Repo+")")
 	}
 	return out, cobra.ShellCompDirectiveNoFileComp
 }
@@ -75,7 +75,8 @@ func doStopOrDestroy(name string, destroy bool) error {
 			return err
 		}
 		gh := githubapi.New(tok)
-		r, err := gh.FindRunner(s.Repo, name)
+		target := s.APITarget()
+		r, err := gh.FindRunner(target, name)
 		if err != nil {
 			return err
 		}
@@ -83,7 +84,7 @@ func doStopOrDestroy(name string, destroy bool) error {
 			fmt.Printf("==> runner %s not found on GitHub (already removed)\n", name)
 		} else {
 			fmt.Printf("==> deleting runner %s (id=%d) from GitHub\n", name, r.ID)
-			if err := gh.DeleteRunner(s.Repo, r.ID); err != nil {
+			if err := gh.DeleteRunner(target, r.ID); err != nil {
 				return err
 			}
 		}

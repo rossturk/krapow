@@ -37,27 +37,32 @@ type runnerList struct {
 	Runners    []Runner `json:"runners"`
 }
 
-// ListRunners returns every runner registered on `repo` (up to 100).
-func (c *Client) ListRunners(repo string) ([]Runner, error) {
+// `target` for the runner-management endpoints is the path prefix that scopes
+// the call: "repos/owner/name" for a repo-level runner or "orgs/orgname" for
+// an org-level runner. GitHub's two endpoint families are otherwise identical,
+// so threading the prefix through is enough to support both.
+
+// ListRunners returns every runner registered under `target` (up to 100).
+func (c *Client) ListRunners(target string) ([]Runner, error) {
 	var out runnerList
-	if err := c.do(http.MethodGet, "/repos/"+repo+"/actions/runners?per_page=100", &out); err != nil {
+	if err := c.do(http.MethodGet, "/"+target+"/actions/runners?per_page=100", &out); err != nil {
 		return nil, err
 	}
 	return out.Runners, nil
 }
 
 // RegistrationToken returns a short-lived token used to `config.sh` a new runner.
-func (c *Client) RegistrationToken(repo string) (string, error) {
+func (c *Client) RegistrationToken(target string) (string, error) {
 	var out registrationToken
-	if err := c.do(http.MethodPost, "/repos/"+repo+"/actions/runners/registration-token", &out); err != nil {
+	if err := c.do(http.MethodPost, "/"+target+"/actions/runners/registration-token", &out); err != nil {
 		return "", err
 	}
 	return out.Token, nil
 }
 
 // FindRunner returns the runner with the given name, or (nil, nil) if absent.
-func (c *Client) FindRunner(repo, name string) (*Runner, error) {
-	runners, err := c.ListRunners(repo)
+func (c *Client) FindRunner(target, name string) (*Runner, error) {
+	runners, err := c.ListRunners(target)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +74,8 @@ func (c *Client) FindRunner(repo, name string) (*Runner, error) {
 	return nil, nil
 }
 
-func (c *Client) DeleteRunner(repo string, id int64) error {
-	return c.do(http.MethodDelete, fmt.Sprintf("/repos/%s/actions/runners/%d", repo, id), nil)
+func (c *Client) DeleteRunner(target string, id int64) error {
+	return c.do(http.MethodDelete, fmt.Sprintf("/%s/actions/runners/%d", target, id), nil)
 }
 
 // WhoAmI checks that the token is accepted by GitHub at all. Doesn't prove

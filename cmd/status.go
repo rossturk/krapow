@@ -35,29 +35,29 @@ func statusCmd() *cobra.Command {
 			}
 
 			// Look up runner state on GitHub. Build a name->runner index per
-			// repo so we only hit the API once per repo even with many runners.
-			// If we can't resolve a token, every row falls back to "unknown"
-			// — that's intentional; status is read-only and should still print
-			// the state we have locally.
+			// API target so we only hit the API once per target even with many
+			// runners. If we can't resolve a token, every row falls back to
+			// "unknown" — that's intentional; status is read-only and should
+			// still print the state we have locally.
 			ghRunners := map[string]map[string]githubapi.Runner{}
 			if tok, _, err := auth.Token(); err == nil {
 				gh := githubapi.New(tok)
-				for _, repo := range uniqueRepos(rs) {
-					if list, err := gh.ListRunners(repo); err == nil {
+				for _, target := range uniqueTargets(rs) {
+					if list, err := gh.ListRunners(target); err == nil {
 						idx := map[string]githubapi.Runner{}
 						for _, r := range list {
 							idx[r.Name] = r
 						}
-						ghRunners[repo] = idx
+						ghRunners[target] = idx
 					}
 				}
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tKIND\tREPO\tVM\tRUNNER")
+			fmt.Fprintln(w, "NAME\tKIND\tSCOPE\tTARGET\tVM\tRUNNER")
 			for _, r := range rs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					r.Name, r.Kind, r.Repo, vmState(r), runnerState(ghRunners, r))
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Name, r.Kind, r.EffectiveScope(), r.Repo, vmState(r), runnerState(ghRunners, r))
 			}
 			return w.Flush()
 		},
@@ -80,11 +80,11 @@ func statusCmd() *cobra.Command {
 //	               Real failure: agent crashed or VM stopped.
 //	unknown      — couldn't query GitHub (bad creds, different repo, etc.).
 func runnerState(idx map[string]map[string]githubapi.Runner, r state.Runner) string {
-	repoIdx, ok := idx[r.Repo]
+	targetIdx, ok := idx[r.APITarget()]
 	if !ok {
 		return "unknown"
 	}
-	gh, ok := repoIdx[r.Name]
+	gh, ok := targetIdx[r.Name]
 	if !ok {
 		return "provisioning"
 	}
@@ -112,13 +112,14 @@ func vmState(r state.Runner) string {
 	return incus.State(r.Name)
 }
 
-func uniqueRepos(rs []state.Runner) []string {
+func uniqueTargets(rs []state.Runner) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, r := range rs {
-		if !seen[r.Repo] {
-			seen[r.Repo] = true
-			out = append(out, r.Repo)
+		t := r.APITarget()
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
 		}
 	}
 	return out

@@ -14,7 +14,8 @@ type Runner struct {
 	Name    string    `json:"name"`
 	Kind    string    `json:"kind"`              // "linux", "windows", or "mac"
 	Backend string    `json:"backend,omitempty"` // "incus" or "tart"; empty == "incus" (pre-mac records)
-	Repo    string    `json:"repo"`              // owner/name
+	Repo    string    `json:"repo"`              // "owner/name" when Scope=="repo"; "orgname" when Scope=="org"
+	Scope   string    `json:"scope,omitempty"`   // "repo" or "org"; empty == "repo" (pre-org-runner records)
 	Labels  string    `json:"labels"`
 	Created time.Time `json:"created"`
 }
@@ -26,6 +27,25 @@ func (r *Runner) EffectiveBackend() string {
 		return "incus"
 	}
 	return r.Backend
+}
+
+// EffectiveScope returns r.Scope with the legacy default ("repo") applied,
+// matching how older state records without the field should be interpreted.
+func (r *Runner) EffectiveScope() string {
+	if r.Scope == "" {
+		return "repo"
+	}
+	return r.Scope
+}
+
+// APITarget returns the GitHub API path prefix for this runner's scope:
+// "repos/owner/name" for repo runners or "orgs/orgname" for org runners.
+// Suitable for passing to githubapi.Client methods.
+func (r *Runner) APITarget() string {
+	if r.EffectiveScope() == "org" {
+		return "orgs/" + r.Repo
+	}
+	return "repos/" + r.Repo
 }
 
 func dir() (string, error) {

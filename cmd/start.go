@@ -72,13 +72,13 @@ func doStart(name string) error {
 	fmt.Printf("==> waiting for runner to report 'online'\n")
 	// Windows boot is ~3-5 min; Linux/Mac are usually under a minute. 10
 	// minutes covers all three with headroom.
-	return pollRunnerOnline(gh, s.Repo, name, 10*time.Minute)
+	return pollRunnerOnline(gh, s.APITarget(), name, 10*time.Minute)
 }
 
-func pollRunnerOnline(gh *githubapi.Client, repo, name string, timeout time.Duration) error {
+func pollRunnerOnline(gh *githubapi.Client, target, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		r, err := gh.FindRunner(repo, name)
+		r, err := gh.FindRunner(target, name)
 		if err != nil {
 			return err
 		}

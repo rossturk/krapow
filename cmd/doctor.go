@@ -20,10 +20,8 @@ func doctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Diagnose host readiness for krapow",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			checks := []func() checkResult{
-				checkAuth,
-				checkGitHubToken,
-			}
+			checks := []func() checkResult{checkAuth}
+			checks = append(checks, gitHubTokenChecks()...)
 			if runtime.GOOS == "darwin" {
 				// macOS host: tart drives mac + linux-arm runners. No incus
 				// here; the Linux-host checks are noise.
@@ -156,7 +154,37 @@ func checkAuth() checkResult {
 	return checkResult{status: statusOK, name: "GitHub token resolvable", detail: "via " + string(src)}
 }
 
-func checkGitHubToken() checkResult {
+// gitHubTokenChecks returns one check per distinct (scope,target) tracked in
+// state, plus a token-only fallback when no runners exist yet. Probing every
+// target catches the common mixed-scope case where a token works for a repo
+// but lacks admin:org for an org runner — and avoids the old "doctor probes
+// some random first-registered repo" surprise.
+func gitHubTokenChecks() []func() checkResult {
+	runners, _ := state.All()
+	if len(runners) == 0 {
+		return []func() checkResult{checkTokenAlive}
+	}
+	// Deduplicate by APITarget so a fleet of N runners against the same
+	// target results in one probe.
+	seen := map[string]bool{}
+	var out []func() checkResult
+	for _, r := range runners {
+		t := r.APITarget()
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		scope := r.EffectiveScope()
+		label := r.Repo
+		out = append(out, func() checkResult { return probeTarget(scope, label, t) })
+	}
+	return out
+}
+
+// checkTokenAlive is the no-runners-tracked fallback: a /user probe just
+// proves the token isn't expired or revoked. Doesn't verify any particular
+// repo/org scope — that gets exercised on first init.
+func checkTokenAlive() checkResult {
 	tok, _, err := auth.Token()
 	if err != nil {
 		return checkResult{
@@ -165,38 +193,48 @@ func checkGitHubToken() checkResult {
 			detail: "skipped (no token resolvable)",
 		}
 	}
-	// We need a repo to probe. If no runners are registered yet, we can't
-	// know which repo the user intends to use — fall back to a token-only
-	// validity check via /user. That doesn't prove repo-level scope but it
-	// at least catches a stale/revoked token.
-	runners, _ := state.All()
-	gh := githubapi.New(tok)
-	if len(runners) == 0 {
-		if err := gh.WhoAmI(); err != nil {
-			return checkResult{
-				status: statusFail,
-				name:   "GitHub token works",
-				detail: err.Error(),
-				fix:    "regenerate token; classic PAT needs 'repo'; fine-grained needs 'admin:repo runners'",
-			}
-		}
-		return checkResult{
-			status: statusOK,
-			name:   "GitHub token works",
-			detail: "no runners yet — repo-scope unverified (will check on first init)",
-		}
-	}
-	// FindRunner is the cheapest probe that exercises auth + repo access without minting a token.
-	repo := runners[0].Repo
-	if _, err := gh.FindRunner(repo, "__krapow-doctor-probe__"); err != nil {
+	if err := githubapi.New(tok).WhoAmI(); err != nil {
 		return checkResult{
 			status: statusFail,
-			name:   "GitHub token works for " + repo,
+			name:   "GitHub token works",
 			detail: err.Error(),
 			fix:    "regenerate token; classic PAT needs 'repo'; fine-grained needs 'admin:repo runners'",
 		}
 	}
-	return checkResult{status: statusOK, name: "GitHub token works for " + repo}
+	return checkResult{
+		status: statusOK,
+		name:   "GitHub token works",
+		detail: "no runners yet — scope unverified (will check on first init)",
+	}
+}
+
+// probeTarget exercises the token against one runner-management target.
+// FindRunner with a sentinel name is the cheapest call that hits the same
+// permission gate as actual runner operations without minting a token.
+func probeTarget(scope, label, target string) checkResult {
+	tok, _, err := auth.Token()
+	if err != nil {
+		return checkResult{
+			status: statusWarn,
+			name:   "GitHub token works for " + label,
+			detail: "skipped (no token resolvable)",
+		}
+	}
+	gh := githubapi.New(tok)
+	name := "GitHub token works for " + scope + ":" + label
+	if _, err := gh.FindRunner(target, "__krapow-doctor-probe__"); err != nil {
+		fix := "regenerate token; repo runners need 'repo' scope"
+		if scope == "org" {
+			fix = "org runners need admin:org — try `gh auth refresh -h github.com -s admin:org`, or use a PAT with the org's 'Self-hosted runners: read & write' permission"
+		}
+		return checkResult{
+			status: statusFail,
+			name:   name,
+			detail: err.Error(),
+			fix:    fix,
+		}
+	}
+	return checkResult{status: statusOK, name: name}
 }
 
 func checkWindowsBuildDeps() checkResult {

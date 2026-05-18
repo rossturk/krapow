@@ -50,7 +50,7 @@ func initCmd() *cobra.Command {
 }
 
 func initLinuxCmd() *cobra.Command {
-	var name, labels, repo string
+	var name, labels, repo, org string
 	var plain bool
 	// On macOS hosts, `init linux` produces a Linux ARM VM via tart instead of
 	// going through Incus (which doesn't exist on macOS). The labels default
@@ -63,10 +63,10 @@ func initLinuxCmd() *cobra.Command {
 		Use:   "linux",
 		Short: "Launch a Linux runner (Ubuntu via Incus on Linux hosts; Ubuntu ARM via Tart on macOS hosts)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInit(linuxKind, name, labels, repo, plain)
+			return runInit(linuxKind, name, labels, repo, org, plain)
 		},
 	}
-	addRepoFlag(c, &repo)
+	addScopeFlags(c, &repo, &org)
 	c.Flags().StringVar(&name, "name", "", "instance + runner name (default: linux-runner-<6 alphanum>)")
 	c.Flags().StringVar(&labels, "labels", defaultLabels, "comma-separated runner labels")
 	c.Flags().BoolVar(&plain, "plain", false, "disable the interactive TUI and print plain status lines")
@@ -74,7 +74,7 @@ func initLinuxCmd() *cobra.Command {
 }
 
 func initMacCmd() *cobra.Command {
-	var name, labels, repo string
+	var name, labels, repo, org string
 	var plain bool
 	c := &cobra.Command{
 		Use:   "mac",
@@ -83,10 +83,10 @@ func initMacCmd() *cobra.Command {
 			if runtime.GOOS != "darwin" {
 				return fmt.Errorf("`krapow init mac` requires a macOS host (Tart wraps Apple's Virtualization.framework); current GOOS=%s", runtime.GOOS)
 			}
-			return runInit(macKind, name, labels, repo, plain)
+			return runInit(macKind, name, labels, repo, org, plain)
 		},
 	}
-	addRepoFlag(c, &repo)
+	addScopeFlags(c, &repo, &org)
 	c.Flags().StringVar(&name, "name", "", "instance + runner name (default: mac-runner-<6 alphanum>)")
 	c.Flags().StringVar(&labels, "labels", "self-hosted,macOS,arm64,krapow", "comma-separated runner labels")
 	c.Flags().BoolVar(&plain, "plain", false, "disable the interactive TUI and print plain status lines")
@@ -94,16 +94,16 @@ func initMacCmd() *cobra.Command {
 }
 
 func initWinCmd() *cobra.Command {
-	var name, labels, repo string
+	var name, labels, repo, org string
 	var yesBuild, plain bool
 	c := &cobra.Command{
 		Use:   "win",
 		Short: "Launch a Windows Incus VM as a runner (auto-bakes base image on first run)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInitWin(name, labels, repo, yesBuild, plain)
+			return runInitWin(name, labels, repo, org, yesBuild, plain)
 		},
 	}
-	addRepoFlag(c, &repo)
+	addScopeFlags(c, &repo, &org)
 	c.Flags().StringVar(&name, "name", "", "instance + runner name (default: win-runner-<6 alphanum>)")
 	c.Flags().StringVar(&labels, "labels", "self-hosted,windows,krapow", "comma-separated runner labels")
 	c.Flags().BoolVarP(&yesBuild, "yes", "y", false, "skip the confirmation prompt before kicking off a base-image build")
@@ -111,9 +111,15 @@ func initWinCmd() *cobra.Command {
 	return c
 }
 
-func addRepoFlag(c *cobra.Command, repo *string) {
-	c.Flags().StringVar(repo, "repo", "", "GitHub repository in owner/name form (required)")
-	_ = c.MarkFlagRequired("repo")
+// addScopeFlags wires --repo and --org as mutually exclusive flags; exactly
+// one must be provided. The validation happens in resolveScope() so the
+// command can surface a clear error rather than cobra's terser "either ... or"
+// message — but MarkFlagsMutuallyExclusive still blocks the both-set case.
+func addScopeFlags(c *cobra.Command, repo, org *string) {
+	c.Flags().StringVar(repo, "repo", "", "GitHub repository in owner/name form (repo-scoped runner)")
+	c.Flags().StringVar(org, "org", "", "GitHub organization (org-scoped runner; needs an org-admin token)")
+	c.MarkFlagsMutuallyExclusive("repo", "org")
+	c.MarkFlagsOneRequired("repo", "org")
 }
 
 // parseRepo accepts either "owner/name" or a full https URL and returns the
@@ -130,6 +136,58 @@ func parseRepo(s string) (string, error) {
 	}
 	if strings.Count(s, "/") != 1 || strings.HasPrefix(s, "/") || strings.HasSuffix(s, "/") {
 		return "", fmt.Errorf("--repo %q is not owner/name", s)
+	}
+	return s, nil
+}
+
+// scopeHint returns a "\n  hint: ..." suffix for the preflight error when the
+// failure looks like a missing-scope 403 on an org endpoint. Empty otherwise.
+// `gh auth login` defaults don't include admin:org, so this is the single most
+// common cause of an org-runner init failing — naming the exact fix saves the
+// user a docs trip.
+func scopeHint(scope string, err error) string {
+	if scope != "org" || err == nil || !strings.Contains(err.Error(), "403") {
+		return ""
+	}
+	return "\n  hint: org runners need the admin:org scope; try `gh auth refresh -h github.com -s admin:org` (or use a PAT with the org's 'Self-hosted runners: read & write' permission)"
+}
+
+// resolveScope normalizes the --repo/--org flag pair into (ownerOrRepo, scope,
+// apiTarget). Cobra's MarkFlagsOneRequired/MutuallyExclusive guarantee exactly
+// one is set, so the empty-string check is just a belt-and-braces fallback.
+func resolveScope(repoFlag, orgFlag string) (owner, scope, target string, err error) {
+	switch {
+	case repoFlag != "":
+		owner, err = parseRepo(repoFlag)
+		if err != nil {
+			return "", "", "", err
+		}
+		return owner, "repo", "repos/" + owner, nil
+	case orgFlag != "":
+		owner, err = parseOrg(orgFlag)
+		if err != nil {
+			return "", "", "", err
+		}
+		return owner, "org", "orgs/" + owner, nil
+	default:
+		return "", "", "", fmt.Errorf("either --repo or --org is required")
+	}
+}
+
+// parseOrg accepts either a bare org slug or a full https URL like
+// https://github.com/orgname and returns the normalized slug. Used by
+// `init --org`.
+func parseOrg(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", fmt.Errorf("--org %q: %w", s, err)
+		}
+		s = strings.Trim(u.Path, "/")
+	}
+	if s == "" || strings.Contains(s, "/") {
+		return "", fmt.Errorf("--org %q is not a bare organization slug", s)
 	}
 	return s, nil
 }
@@ -156,7 +214,7 @@ func envOr(k, def string) string {
 	return def
 }
 
-func runInitWin(name, labels, repo string, yesBuild, plain bool) error {
+func runInitWin(name, labels, repo, org string, yesBuild, plain bool) error {
 	exists, err := incus.ImageExists(windowsImage)
 	if err != nil {
 		return err
@@ -175,7 +233,7 @@ func runInitWin(name, labels, repo string, yesBuild, plain bool) error {
 			return err
 		}
 	}
-	return runInit(windowsKind, name, labels, repo, plain)
+	return runInit(windowsKind, name, labels, repo, org, plain)
 }
 
 func readYes() bool {
@@ -193,14 +251,16 @@ type initContext struct {
 	kind     kind
 	name     string
 	labels   string
-	repo     string // "owner/name"
-	repoURL  string // "https://github.com/owner/name"
+	owner    string // "owner/name" for repo runners, or "orgname" for org runners
+	scope    string // "repo" or "org"
+	target   string // API path prefix: "repos/owner/name" or "orgs/orgname"
+	ownerURL string // "https://github.com/owner/name" or "https://github.com/orgname"
 	regToken string
 	vmIP     string // populated by Windows ssh phase
 }
 
-func runInit(k kind, name, labels, repoFlag string, plain bool) error {
-	repo, err := parseRepo(repoFlag)
+func runInit(k kind, name, labels, repoFlag, orgFlag string, plain bool) error {
+	owner, scope, target, err := resolveScope(repoFlag, orgFlag)
 	if err != nil {
 		return err
 	}
@@ -209,10 +269,10 @@ func runInit(k kind, name, labels, repoFlag string, plain bool) error {
 		return err
 	}
 	gh := githubapi.New(tok)
-	// Preflight: confirm the token can see this repo's runners before we boot
+	// Preflight: confirm the token can see this target's runners before we boot
 	// a VM. Cheaper to fail here than 5 minutes into a tart pull.
-	if _, err := gh.ListRunners(repo); err != nil {
-		return fmt.Errorf("cannot access %s with current token: %w", repo, err)
+	if _, err := gh.ListRunners(target); err != nil {
+		return fmt.Errorf("cannot access %s with current token: %w%s", owner, err, scopeHint(scope, err))
 	}
 	if name == "" {
 		name = fmt.Sprintf("%s-%s", kindPrefix(k), randomSuffix())
@@ -222,12 +282,14 @@ func runInit(k kind, name, labels, repoFlag string, plain bool) error {
 	}
 
 	ic := &initContext{
-		gh:      gh,
-		kind:    k,
-		name:    name,
-		labels:  labels,
-		repo:    repo,
-		repoURL: "https://github.com/" + repo,
+		gh:       gh,
+		kind:     k,
+		name:     name,
+		labels:   labels,
+		owner:    owner,
+		scope:    scope,
+		target:   target,
+		ownerURL: "https://github.com/" + owner,
 	}
 
 	phases := phasesFor(k)
@@ -250,10 +312,55 @@ func runInit(k kind, name, labels, repoFlag string, plain bool) error {
 		return err
 	}
 	if workErr != nil {
+		cleanupFailedInit(ic)
 		return workErr
 	}
 	fmt.Printf("==> %s registered (%s)\n", ic.name, kindName(k))
 	return nil
+}
+
+// cleanupFailedInit best-effort destroys anything a failed init managed to
+// create: the GitHub runner registration (only present past the Activate
+// phase, but FindRunner is cheap), the VM (tart or incus), and the local
+// state file. Each step ignores errors and logs to stderr — we're already
+// on an error path and shouldn't mask the original failure.
+//
+// The branch on state.Load handles the case where init died before saving
+// state: in that case the VM doesn't exist either, so there's nothing local
+// to clean. We still try the GitHub side because the registration token
+// could in theory have been used by a half-running guest.
+func cleanupFailedInit(ic *initContext) {
+	fmt.Fprintf(os.Stderr, "==> cleaning up partial init of %s\n", ic.name)
+
+	if runner, err := ic.gh.FindRunner(ic.target, ic.name); err == nil && runner != nil {
+		fmt.Fprintf(os.Stderr, "    unregistering %s from GitHub (id=%d)\n", ic.name, runner.ID)
+		if err := ic.gh.DeleteRunner(ic.target, runner.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "    (warn) DeleteRunner: %v\n", err)
+		}
+	}
+
+	s, _ := state.Load(ic.name)
+	if s == nil {
+		// VM was never recorded — nothing local to remove.
+		return
+	}
+
+	if s.EffectiveBackend() == "tart" {
+		fmt.Fprintf(os.Stderr, "    destroying tart VM %s\n", ic.name)
+		_ = tart.Stop(ic.name, 30)
+		if err := tart.Delete(ic.name); err != nil {
+			fmt.Fprintf(os.Stderr, "    (warn) tart delete: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "    destroying incus VM %s\n", ic.name)
+		if err := incus.Delete(ic.name); err != nil {
+			fmt.Fprintf(os.Stderr, "    (warn) incus delete: %v\n", err)
+		}
+	}
+
+	if err := state.Remove(ic.name); err != nil {
+		fmt.Fprintf(os.Stderr, "    (warn) state.Remove: %v\n", err)
+	}
 }
 
 func kindName(k kind) string {
@@ -314,8 +421,8 @@ func phasesFor(k kind) []tui.PhaseSpec {
 
 func doInit(r *tui.Runner, ic *initContext) error {
 	r.Start("register")
-	r.Log("POST /repos/%s/actions/runners/registration-token", ic.repo)
-	tok, err := ic.gh.RegistrationToken(ic.repo)
+	r.Log("POST /%s/actions/runners/registration-token", ic.target)
+	tok, err := ic.gh.RegistrationToken(ic.target)
 	if err == nil {
 		r.Log("token issued (1h ttl)")
 	}
@@ -326,7 +433,7 @@ func doInit(r *tui.Runner, ic *initContext) error {
 	ic.regToken = tok
 
 	vars := provision.Vars{
-		RepoURL: ic.repoURL, RegToken: ic.regToken,
+		RepoURL: ic.ownerURL, RegToken: ic.regToken,
 		Name: ic.name, Labels: ic.labels,
 	}
 	switch {
@@ -361,7 +468,7 @@ func doInitLinux(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 		r.Log("VM started (cloud-init now running async inside the guest)")
 		r.Log("writing ~/.krapow/state/%s.json", ic.name)
 		err = state.Save(state.Runner{
-			Name: ic.name, Kind: "linux", Repo: ic.repo,
+			Name: ic.name, Kind: "linux", Repo: ic.owner, Scope: ic.scope,
 			Labels: ic.labels, Created: time.Now(),
 		})
 	}
@@ -381,7 +488,7 @@ func doInitLinux(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 
 	r.Start("verify")
 	r.Log("polling GitHub for runner to report 'online'")
-	err = verifyRunnerOnline(r, ic.gh, ic.repo, ic.name, 2*time.Minute)
+	err = verifyRunnerOnline(r, ic.gh, ic.target, ic.name, 2*time.Minute)
 	r.End("verify", err)
 	return err
 }
@@ -427,7 +534,7 @@ func doInitTart(r *tui.Runner, ic *initContext, vars provision.Vars, image, gues
 	}
 	if err := state.Save(state.Runner{
 		Name: ic.name, Kind: guestKind, Backend: "tart",
-		Repo: ic.repo, Labels: ic.labels, Created: time.Now(),
+		Repo: ic.owner, Scope: ic.scope, Labels: ic.labels, Created: time.Now(),
 	}); err != nil {
 		r.End("boot", err)
 		return err
@@ -462,7 +569,7 @@ func doInitTart(r *tui.Runner, ic *initContext, vars provision.Vars, image, gues
 
 	r.Start("verify")
 	r.Log("polling GitHub for runner to report 'online'")
-	err = verifyRunnerOnline(r, ic.gh, ic.repo, ic.name, 2*time.Minute)
+	err = verifyRunnerOnline(r, ic.gh, ic.target, ic.name, 2*time.Minute)
 	r.End("verify", err)
 	return err
 }
@@ -517,7 +624,7 @@ func doInitWindows(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 	if err == nil {
 		r.Log("VM started; writing state file")
 		err = state.Save(state.Runner{
-			Name: ic.name, Kind: "windows", Repo: ic.repo,
+			Name: ic.name, Kind: "windows", Repo: ic.owner, Scope: ic.scope,
 			Labels: ic.labels, Created: time.Now(),
 		})
 	}
@@ -578,17 +685,17 @@ if ($max -gt $cur) {
 
 	r.Start("verify")
 	r.Log("polling GitHub for runner to report 'online'")
-	err = verifyRunnerOnline(r, ic.gh, ic.repo, ic.name, 2*time.Minute)
+	err = verifyRunnerOnline(r, ic.gh, ic.target, ic.name, 2*time.Minute)
 	r.End("verify", err)
 	return err
 }
 
 // verifyRunnerOnline polls GitHub until the runner is registered AND its
 // status is 'online' (heartbeating).
-func verifyRunnerOnline(r *tui.Runner, gh *githubapi.Client, repo, name string, timeout time.Duration) error {
+func verifyRunnerOnline(r *tui.Runner, gh *githubapi.Client, target, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		runner, err := gh.FindRunner(repo, name)
+		runner, err := gh.FindRunner(target, name)
 		if err != nil {
 			return err
 		}
