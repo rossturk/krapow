@@ -1,5 +1,12 @@
 # Krapow: Easy GitHub Actions Runners
 
+```
+   .'.     _  _  ___    _   ___  _____      __
+  /v|v\   | |/ /| _ \  /_\ | _ \/ _ \ \ /\ / /
+  \^|^/   | ' < |   / / _ \|  _/ (_) \ V  V / 
+   `|`    |_|\_\|_|_\/_/ \_\_|  \___/ \_/\_/  
+```
+
 GitHub Actions self-hosted runners in VMs — Linux and Windows via [Incus](https://linuxcontainers.org/incus/), macOS and Linux ARM via [Tart](https://tart.run/). Single-command builds a VM and registers it as a runner against your repo.
 
 ```sh
