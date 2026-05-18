@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/rossturk/krapow/internal/imagebuild"
+	"github.com/widdlab/krapow/internal/imagebuild"
 	"github.com/spf13/cobra"
 )
 

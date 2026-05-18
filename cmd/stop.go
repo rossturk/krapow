@@ -3,11 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rossturk/krapow/internal/auth"
-	"github.com/rossturk/krapow/internal/githubapi"
-	"github.com/rossturk/krapow/internal/incus"
-	"github.com/rossturk/krapow/internal/state"
-	"github.com/rossturk/krapow/internal/tart"
+	"github.com/widdlab/krapow/internal/auth"
+	"github.com/widdlab/krapow/internal/githubapi"
+	"github.com/widdlab/krapow/internal/incus"
+	"github.com/widdlab/krapow/internal/state"
+	"github.com/widdlab/krapow/internal/tart"
 	"github.com/spf13/cobra"
 )
 

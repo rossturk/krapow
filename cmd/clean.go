@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"runtime"
 
-	"github.com/rossturk/krapow/internal/incus"
-	"github.com/rossturk/krapow/internal/state"
-	"github.com/rossturk/krapow/internal/tart"
+	"github.com/widdlab/krapow/internal/incus"
+	"github.com/widdlab/krapow/internal/state"
+	"github.com/widdlab/krapow/internal/tart"
 	"github.com/spf13/cobra"
 )
 

@@ -1,4 +1,4 @@
-module github.com/rossturk/krapow
+module github.com/widdlab/krapow
 
 go 1.25.0
 

@@ -27,10 +27,10 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/rossturk/krapow/internal/incus"
-	"github.com/rossturk/krapow/internal/sshkeys"
-	"github.com/rossturk/krapow/internal/tui"
-	"github.com/rossturk/krapow/internal/winssh"
+	"github.com/widdlab/krapow/internal/incus"
+	"github.com/widdlab/krapow/internal/sshkeys"
+	"github.com/widdlab/krapow/internal/tui"
+	"github.com/widdlab/krapow/internal/winssh"
 )
 
 // bakeOut / bakeErr are where runFG (the helper that shells out to

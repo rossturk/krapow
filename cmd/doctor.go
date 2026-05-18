@@ -8,10 +8,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/rossturk/krapow/internal/auth"
-	"github.com/rossturk/krapow/internal/githubapi"
-	"github.com/rossturk/krapow/internal/imagebuild"
-	"github.com/rossturk/krapow/internal/state"
+	"github.com/widdlab/krapow/internal/auth"
+	"github.com/widdlab/krapow/internal/githubapi"
+	"github.com/widdlab/krapow/internal/imagebuild"
+	"github.com/widdlab/krapow/internal/state"
 	"github.com/spf13/cobra"
 )
 
