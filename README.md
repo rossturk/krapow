@@ -1,52 +1,22 @@
+# Krapow: Easy GitHub Actions Runners
+
+GitHub Actions self-hosted runners in VMs — Linux and Windows via [Incus](https://linuxcontainers.org/incus/), macOS and Linux ARM via [Tart](https://tart.run/). Single-command builds a VM and registers it as a runner against your repo.
+
+```sh
+krapow init linux --repo mystuff/myrepo
+krapow init win --repo mystuff/myrepo
+krapow init mac --repo mystuff/myrepo
 ```
-   .'.     _  _  ___    _   ___  _____      __
-  /v|v\   | |/ /| _ \  /_\ | _ \/ _ \ \ /\ / /
-  \^|^/   | ' < |   / / _ \|  _/ (_) \ V  V / 
-   `|`    |_|\_\|_|_\/_/ \_\_|  \___/ \_/\_/  
-```
-
-The holy basil CLI.
-
-# Krapow: Easy GitHub Actions Runner VMs
-
-GitHub Actions self-hosted runners in ephemeral VMs — Linux and Windows via [Incus](https://linuxcontainers.org/incus/), macOS and Linux ARM via [Tart](https://tart.run/). One command builds a VM and registers it as a runner against your repo.
 
 ## Why
 
 GitHub's runners cost money. Their free tier is just enough to get you up and running, and then you quickly hit quota. If you're not working on a revenue-generating project, you might not want to pay for them.
 
-Self-hosted runners are a pain to set up and keep running. Yeah, it's just a script. But do you have a Windows box laying around? Do you know how to keep it from falling asleep?
+Self-hosted runners are a pain to set up and keep running. Yeah, it's just a setup script. But do you have spare machines laying around? Do you know how to keep it from falling asleep? It's not hard, but it's hard enough to be a pain.
 
-This lets you manage your runner workflow with simple init/destroy commands. It runs on the Linux system in your closet or the Macbook on your desk. If you run it across both of those, you can build for basically anything.
+Krapow lets you manage runners with simple init/destroy commands that run on the Linux box in your closet or the Mac on your lap. If you run it across both of those footprints, you can build for most major targets.
 
 One set of commands keeps it all running.
-
-## Requirements
-
-Always:
-
-- A GitHub token with `repo` scope (classic PAT) or **Administration: read & write** (fine-grained PAT) on the target repo — `gh auth token` is fine too.
-
-On a Linux host:
-
-- `incus` on PATH and your user in the `incus-admin` group (used for both Linux and Windows runner VMs)
-- `sshpass` (only if you'll spawn Windows runners — the Windows image accepts password auth before krapow installs its SSH key)
-
-On a macOS host:
-
-- `tart` on PATH (`brew install cirruslabs/cli/tart`) — used for both macOS and Linux-ARM runner VMs
-
-Run `krapow doctor` any time to check what's missing.
-
-### GitHub token
-
-`krapow` resolves a token in this order:
-
-1. `GITHUB_TOKEN` environment variable
-2. `PAT` environment variable 
-3. `gh auth token` (if [GitHub CLI](https://cli.github.com/) is installed and authenticated)
-
-Classic PATs need the `repo` scope. Fine-grained PATs need **Administration: read & write** on the target repo (this is where the runner-registration token comes from).
 
 ## Install
 
@@ -72,17 +42,15 @@ curl -fsSL https://raw.githubusercontent.com/rossturk/krapow/main/install.sh | b
 
 Override the install location with `KRAPOW_INSTALL_DIR=/usr/local/bin` (the script will use `install -m 0755`, so write permission is on you).
 
-### From source
+## GitHub token
 
-Needs Go 1.25+ and [`just`](https://github.com/casey/just).
+`krapow` resolves a token in this order:
 
-```sh
-# build into ./krapow
-just build
+1. `GITHUB_TOKEN` environment variable
+2. `PAT` environment variable 
+3. `gh auth token` (if [GitHub CLI](https://cli.github.com/) is installed and authenticated)
 
-# install into ~/.local/bin (must be on PATH)
-just install
-```
+Classic PATs need the `repo` scope. Fine-grained PATs need **Administration: read & write** on the target repo (this is where the runner-registration token comes from).
 
 ## Quickstart
 
@@ -150,6 +118,33 @@ State lives under `~/.krapow/state/` — one JSON file per runner. The Windows b
 
 `krapow init` runs a sequence of named phases — image pull, VM launch, provisioning, runner install, GitHub registration — surfaced live in a TUI (or as plain text under `--plain` / when stdout isn't a terminal). The Windows path additionally goes through a `bake` step that downloads the Windows Server 2022 eval ISO, runs an unattended install, applies virtio drivers, runs sysprep, and publishes the result as a reusable Incus image. See [`docs/flows.html`](docs/flows.html) for the full state-flow diagram.
 
+## System requirements
+
+The install methods should take care of this for ya, but just in case:
+
+On a Linux host:
+
+- `incus` on PATH and your user in the `incus-admin` group (used for both Linux and Windows runner VMs)
+- `sshpass` (only if you'll spawn Windows runners — the Windows image accepts password auth before krapow installs its SSH key)
+
+On a macOS host:
+
+- `tart` on PATH (`brew install cirruslabs/cli/tart`) — used for both macOS and Linux-ARM runner VMs
+
+Run `krapow doctor` any time to check what's missing.
+
+## Building from source
+
+Needs Go 1.25+ and [`just`](https://github.com/casey/just).
+
+```sh
+# build into ./krapow
+just build
+
+# install into ~/.local/bin (must be on PATH)
+just install
+```
+
 ## Development
 
 ```sh
@@ -162,6 +157,7 @@ just destroy-all  # tear down every krapow-managed runner
 ```
 
 `just linux owner/name`, `just win owner/name`, `just mac owner/name` are convenience shortcuts for `krapow init`. `just destroy <name>` mirrors `krapow destroy`.
+
 
 ## License
 
