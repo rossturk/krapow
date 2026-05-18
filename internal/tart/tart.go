@@ -233,6 +233,22 @@ func listAll() ([]listEntry, error) {
 	return entries, nil
 }
 
+// LocalVMs returns the names of every locally-cloned tart VM (Source=="local"),
+// skipping pulled OCI images. Used by `krapow clean` to find orphan VMs.
+func LocalVMs() ([]string, error) {
+	entries, err := listAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.Source == "local" {
+			out = append(out, e.Name)
+		}
+	}
+	return out, nil
+}
+
 // ImageExists reports whether a local VM/image with this name is in the tart
 // cache. Used the same way as incus.ImageExists — to decide whether to pull.
 func ImageExists(imageRef string) (bool, error) {

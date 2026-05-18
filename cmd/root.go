@@ -9,6 +9,6 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(initCmd(), bakeCmd(), statusCmd(), startCmd(), stopCmd(), destroyCmd(), shellCmd(), doctorCmd())
+	root.AddCommand(initCmd(), bakeCmd(), statusCmd(), startCmd(), stopCmd(), destroyCmd(), shellCmd(), doctorCmd(), cleanCmd())
 	return root
 }

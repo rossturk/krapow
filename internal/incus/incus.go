@@ -85,6 +85,24 @@ func State(name string) string {
 func Start(name string) error  { return runStream("start", name) }
 func Stop(name string) error   { return runStream("stop", name) }
 func Delete(name string) error { return runStream("delete", "--force", name) }
+
+// Instances returns the names of every instance the incus daemon knows about.
+// Used by `krapow clean` to enumerate candidates for orphan removal.
+func Instances() ([]string, error) {
+	out, err := run("list", "--format", "csv", "-c", "n")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
+}
+
 func Exec(name string, args ...string) error {
 	return runStream(append([]string{"exec", name, "--"}, args...)...)
 }
