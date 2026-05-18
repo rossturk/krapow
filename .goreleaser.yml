@@ -26,6 +26,13 @@ builds:
     goarch:
       - amd64
       - arm64
+    hooks:
+      # Codesign + notarize Darwin binaries before they get archived. The
+      # script exits early for non-darwin targets, so Linux builds pass
+      # through untouched. Requires the release workflow to be on a macOS
+      # runner with the Apple cert imported (apple-actions/import-codesign-certs).
+      post:
+        - cmd: ./scripts/sign-darwin.sh "{{ .Path }}" "{{ .Target }}"
 
 archives:
   - id: default

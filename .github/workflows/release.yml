@@ -13,7 +13,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # macos-latest is required so we can codesign + notarize the Darwin
+    # binaries locally (codesign and notarytool only run on macOS). Linux
+    # builds cross-compile just fine from a Mac runner.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,6 +24,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      # Imports the Developer ID Application cert into a temporary keychain
+      # that codesign can see during this job. Cleaned up automatically when
+      # the runner is torn down.
+      - uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -31,3 +41,9 @@ jobs:
           # PAT with repo scope on widdlab/homebrew-tap. Without it, the
           # brews step fails but the release archives still publish.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Threaded into scripts/sign-darwin.sh via the goreleaser post
+          # hook on the darwin builds. Apple ID + app-specific password
+          # drives notarytool; the cert (above) drives codesign.
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
