@@ -70,3 +70,57 @@ clean-bakes:
 rebake: build clean-bakes
     incus image delete win-runner-base 2>/dev/null || true
     ./krapow bake
+
+# tag and push v<version>; the release workflow takes it from there.
+# usage: just release 0.2.0
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    tag="v{{version}}"
+
+    # Refuse to tag in messy states. Each of these has bitten me at least
+    # once on other projects — better to fail loud and local than discover
+    # mid-release that the artifact doesn't match what's in main.
+    if [[ ! "{{version}}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+        echo "error: '{{version}}' isn't semver (expected MAJOR.MINOR.PATCH[-pre])" >&2
+        exit 1
+    fi
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo "error: working tree not clean — commit or stash first" >&2
+        git status --short >&2
+        exit 1
+    fi
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$branch" != "main" ]]; then
+        echo "error: must be on main (currently '$branch')" >&2
+        exit 1
+    fi
+    git fetch --quiet origin main
+    if ! git diff --quiet HEAD origin/main; then
+        echo "error: local main differs from origin/main — pull or push first" >&2
+        exit 1
+    fi
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        echo "error: tag $tag already exists" >&2
+        exit 1
+    fi
+
+    # Build the annotation body from the commit log since the previous tag.
+    # goreleaser uses GitHub's changelog mode for the release body anyway,
+    # but a sensible `git show $tag` is nice and shows up in `git log`.
+    prev=$(git describe --tags --abbrev=0 2>/dev/null || true)
+    if [[ -n "$prev" ]]; then
+        body=$(printf '%s\n\nChanges since %s:\n\n%s\n' "$tag" "$prev" "$(git log --pretty='- %s' "$prev"..HEAD)")
+    else
+        body=$(printf '%s\n\n%s\n' "$tag" "$(git log --pretty='- %s')")
+    fi
+
+    echo "==> tagging $tag"
+    echo "$body" | sed 's/^/    /'
+    echo
+
+    git tag -a "$tag" -m "$body"
+    git push origin "$tag"
+
+    echo "==> pushed. release workflow: https://github.com/widdlab/krapow/actions/workflows/release.yml"
