@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Krapow">
+  <defs>
+    <pattern id="dot" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="14" cy="14" r="1.2" fill="#1b1a14" opacity="0.06"></circle>
+    </pattern>
+  </defs>
+
+  
+  <rect width="1480" height="320" fill="#f4efe4"></rect>
+  <rect width="1480" height="320" fill="url(#dot)"></rect>
+
+  
+  <rect width="1480" height="5" fill="#3f7a4a"></rect>
+  <rect y="315" width="1480" height="5" fill="#7a4a8a"></rect>
+
+  
+  <g font-family="ui-monospace, &#39;SF Mono&#39;, Menlo, &#39;Cascadia Mono&#39;, Consolas, &#39;DejaVu Sans Mono&#39;, &#39;Courier New&#39;, monospace" font-size="44" font-weight="700" style="font-variant-ligatures:none; font-feature-settings:&#39;liga&#39; 0,&#39;calt&#39; 0,&#39;kern&#39; 0;">
+
+    <text x="60" y="92" xml:space="preserve"><tspan fill="#7a4a8a">   .&#39;.</tspan><tspan fill="#1b1a14">     _  _  ___    _   ___  _____      __</tspan></text>
+    <text x="60" y="146" xml:space="preserve"><tspan fill="#7a4a8a">  /</tspan><tspan fill="#3f7a4a">v|v</tspan><tspan fill="#7a4a8a">\</tspan><tspan fill="#1b1a14">   | |/ /| _ \  /_\ | _ \/ _ \ \ /\ / /</tspan></text>
+    <text x="60" y="200" xml:space="preserve"><tspan fill="#7a4a8a">  \</tspan><tspan fill="#3f7a4a">^|^</tspan><tspan fill="#7a4a8a">/</tspan><tspan fill="#1b1a14">   | &#39; &lt; |   / / _ \|  _/ (_) \ V  V / </tspan></text>
+    <text x="60" y="254" xml:space="preserve"><tspan fill="#3f7a4a">   `|`</tspan><tspan fill="#1b1a14">    |_|\_\|_|_\/_/ \_\_|  \___/ \_/\_/  </tspan></text>
+  </g>
+</svg>

@@ -1,4 +1,12 @@
+<p align="center">
+  <img src="docs/img/krapow-header.svg" alt="Krapow" />
+</p>
+
 # Krapow: Easy GitHub Actions Runners
+
+<a href="https://github.com/rossturk/krapow" target="_blank"><img src="https://img.shields.io/github/go-mod/go-version/rossturk/krapow?style=for-the-badge&logo=go" alt="Krapow Go Version" /></a>
+<a href="https://goreportcard.com/report/github.com/rossturk/krapow" target="_blank"><img src="https://goreportcard.com/badge/github.com/rossturk/krapow?style=for-the-badge&logo=go" alt="Krapow Go Report Card" /></a>
+<a href="https://github.com/rossturk/krapow" target="_blank"><img src="https://img.shields.io/github/license/rossturk/krapow?style=for-the-badge" alt="Krapow Licence" /></a>
 
 ```
    .'.     _  _  ___    _   ___  _____      __
