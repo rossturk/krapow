@@ -149,7 +149,7 @@ func scopeHint(scope string, err error) string {
 	if scope != "org" || err == nil || !strings.Contains(err.Error(), "403") {
 		return ""
 	}
-	return "\n  hint: org runners need the admin:org scope; try `gh auth refresh -h github.com -s admin:org` (or use a PAT with the org's 'Self-hosted runners: read & write' permission)"
+	return "\n\n  hint: org runners need the admin:org scope; try `gh auth refresh -h github.com -s admin:org` (or use a PAT with the org's 'Self-hosted runners: read & write' permission)"
 }
 
 // resolveScope normalizes the --repo/--org flag pair into (ownerOrRepo, scope,
