@@ -698,7 +698,7 @@ func doInitMacHost(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 		r.End("activate", err)
 		return err
 	}
-	r.Log("launchctl bootstrap gui/%d %s", os.Getuid(), filepath.Base(plistPath))
+	r.Log("launchctl bootstrap user/%d %s", os.Getuid(), filepath.Base(plistPath))
 	if err := hostmac.Bootstrap(ic.name); err != nil {
 		r.End("activate", err)
 		return err

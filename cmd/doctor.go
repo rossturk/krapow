@@ -201,9 +201,9 @@ func checkTartCacheHealth() checkResult {
 }
 
 // checkLaunchctlReachable verifies the launchctl CLI is available and the
-// gui/<uid> domain is reachable. Host-isolated runners are LaunchAgents in
-// that domain; if launchctl can't talk to it (e.g. user is running over SSH
-// without a real GUI session), `krapow init mac` will fail at activate.
+// user/<uid> domain is reachable. Host-isolated runners are LaunchAgents in
+// that per-user domain (not gui/<uid>, which requires an Aqua session and
+// fails over SSH).
 func checkLaunchctlReachable() checkResult {
 	if _, err := exec.LookPath("launchctl"); err != nil {
 		return checkResult{
@@ -213,17 +213,17 @@ func checkLaunchctlReachable() checkResult {
 			fix:    "comes with macOS — investigate /bin/launchctl",
 		}
 	}
-	target := "gui/" + fmt.Sprintf("%d", os.Getuid())
+	target := "user/" + fmt.Sprintf("%d", os.Getuid())
 	out, err := exec.Command("launchctl", "print", target).CombinedOutput()
 	if err != nil {
 		return checkResult{
 			status: statusWarn,
-			name:   "launchctl gui/<uid> reachable",
+			name:   "launchctl user/<uid> reachable",
 			detail: strings.TrimSpace(string(out)),
-			fix:    "host-isolated runners need a real login session; if you're on SSH, try again after `launchctl asuser` or fall back to `--isolation vm`",
+			fix:    "host-isolated runners need a per-user launchd context; if the user has never logged in on this host, log in once or fall back to `--isolation vm`",
 		}
 	}
-	return checkResult{status: statusOK, name: "launchctl gui/<uid> reachable"}
+	return checkResult{status: statusOK, name: "launchctl user/<uid> reachable"}
 }
 
 // checkHostToolchain verifies the tools host-isolated runners depend on are

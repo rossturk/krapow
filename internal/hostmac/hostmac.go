@@ -187,15 +187,24 @@ func WritePlist(name string) error {
 	return os.WriteFile(pp, []byte(content), 0o644)
 }
 
-// Bootstrap loads the plist via `launchctl bootstrap gui/<uid>`. Treats
+// userDomain returns the launchctl per-user domain target for the current
+// uid. We use user/<uid> rather than gui/<uid> because the latter requires
+// an Aqua session — `krapow init mac` over SSH would otherwise fail with
+// "Domain does not support specified action". user/<uid> works in both
+// SSH and GUI contexts. Runners don't need GUI access (codesign etc.
+// reach the keychain via Security.framework, not the WindowServer).
+func userDomain() string {
+	return "user/" + strconv.Itoa(os.Getuid())
+}
+
+// Bootstrap loads the plist via `launchctl bootstrap user/<uid>`. Treats
 // already-loaded as success so `krapow start` is idempotent.
 func Bootstrap(name string) error {
 	pp, err := LaunchAgentPath(name)
 	if err != nil {
 		return err
 	}
-	target := "gui/" + strconv.Itoa(os.Getuid())
-	out, err := exec.Command("launchctl", "bootstrap", target, pp).CombinedOutput()
+	out, err := exec.Command("launchctl", "bootstrap", userDomain(), pp).CombinedOutput()
 	if err == nil {
 		return nil
 	}
@@ -208,7 +217,7 @@ func Bootstrap(name string) error {
 
 // Bootout unloads the plist. Returns nil if it wasn't loaded.
 func Bootout(name string) error {
-	target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + Label(name)
+	target := userDomain() + "/" + Label(name)
 	out, err := exec.Command("launchctl", "bootout", target).CombinedOutput()
 	if err == nil {
 		return nil
@@ -226,7 +235,7 @@ func Bootout(name string) error {
 // "running" here means "launchd has the job"; if the supervised process
 // itself is crash-looping, GitHub will show the runner as Offline anyway.
 func State(name string) string {
-	target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + Label(name)
+	target := userDomain() + "/" + Label(name)
 	cmd := exec.Command("launchctl", "print", target)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
