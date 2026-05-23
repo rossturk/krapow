@@ -40,7 +40,22 @@ func runStream(args ...string) error {
 //
 //	deviceKV: map[string]string{"root.size": "40GiB"}  →  -d root,size=40GiB
 func LaunchVM(image, name string, configKV, deviceKV map[string]string) error {
-	args := []string{"launch", "--quiet", image, name, "--vm"}
+	return launch(true, image, name, configKV, deviceKV)
+}
+
+// LaunchContainer creates and starts an Incus system container from `image`.
+// Same shape as LaunchVM, minus --vm. Callers should drop VM-only knobs
+// (security.secureboot, root.size) before passing — Incus silently ignores
+// them on containers, but being explicit keeps the call site honest.
+func LaunchContainer(image, name string, configKV, deviceKV map[string]string) error {
+	return launch(false, image, name, configKV, deviceKV)
+}
+
+func launch(vm bool, image, name string, configKV, deviceKV map[string]string) error {
+	args := []string{"launch", "--quiet", image, name}
+	if vm {
+		args = append(args, "--vm")
+	}
 	for k, v := range configKV {
 		args = append(args, "-c", k+"="+v)
 	}

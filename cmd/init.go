@@ -209,13 +209,19 @@ const (
 
 // resolveIsolation maps the user's --isolation flag (or "" for default) to a
 // concrete value validated against what krapow actually implements for this
-// (kind, host) today. The allowed lists grow as new isolation modes ship;
-// today only "vm" exists everywhere.
+// (kind, host) today.
 //
 // The first entry in each list is the default when --isolation is empty.
+// On Linux hosts, linux runners default to "container" (Incus system
+// container — sub-second boot); macOS hosts have no Incus, so linux runners
+// there go through the Tart "vm" path.
 func resolveIsolation(k kind, userInput string) (string, error) {
+	linuxAllowed := []string{"vm"}
+	if runtime.GOOS == "linux" {
+		linuxAllowed = []string{"container", "vm"}
+	}
 	allowed := map[kind][]string{
-		linuxKind:   {"vm"},         // Phase 3 will prepend "container" on Linux hosts
+		linuxKind:   linuxAllowed,
 		macKind:     {"host", "vm"}, // "host" = run as current user under sandboxed HOME (default)
 		windowsKind: {"vm"},         // VM-only forever (no host/container path for Windows)
 	}
@@ -514,18 +520,28 @@ func doInitLinux(r *tui.Runner, ic *initContext, vars provision.Vars) error {
 		return err
 	}
 	r.Start("boot")
-	r.Log("incus launch %s %s --vm", linuxImage, ic.name)
-	r.Log("  cpus=4  memory=8GiB  root=75GiB")
-	// 75 GiB matches GitHub's ubuntu-latest hosted-runner free disk (~74 GB
-	// on a ~84 GB volume), so jobs that assume that headroom won't surprise.
-	err = incus.LaunchVM(linuxImage, ic.name, map[string]string{
-		"user.user-data":      userData,
-		"security.secureboot": "false",
-		"limits.cpu":          "4",
-		"limits.memory":       "8GiB",
-	}, map[string]string{"root.size": "75GiB"})
+	if ic.isolation == "container" {
+		r.Log("incus launch %s %s", linuxImage, ic.name)
+		r.Log("  cpus=4  memory=8GiB  (rootfs grows on demand)")
+		err = incus.LaunchContainer(linuxImage, ic.name, map[string]string{
+			"user.user-data": userData,
+			"limits.cpu":     "4",
+			"limits.memory":  "8GiB",
+		}, nil)
+	} else {
+		r.Log("incus launch %s %s --vm", linuxImage, ic.name)
+		r.Log("  cpus=4  memory=8GiB  root=75GiB")
+		// 75 GiB matches GitHub's ubuntu-latest hosted-runner free disk (~74 GB
+		// on a ~84 GB volume), so jobs that assume that headroom won't surprise.
+		err = incus.LaunchVM(linuxImage, ic.name, map[string]string{
+			"user.user-data":      userData,
+			"security.secureboot": "false",
+			"limits.cpu":          "4",
+			"limits.memory":       "8GiB",
+		}, map[string]string{"root.size": "75GiB"})
+	}
 	if err == nil {
-		r.Log("VM started (cloud-init now running async inside the guest)")
+		r.Log("instance started (cloud-init now running async inside the guest)")
 		r.Log("writing ~/.krapow/state/%s.json", ic.name)
 		err = state.Save(state.Runner{
 			Name: ic.name, Kind: "linux", Isolation: ic.isolation,

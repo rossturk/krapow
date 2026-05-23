@@ -78,6 +78,7 @@ const (
 	statusOK   checkStatus = " ok "
 	statusWarn checkStatus = "warn"
 	statusFail checkStatus = "fail"
+	statusSkip checkStatus = "skip"
 )
 
 type checkResult struct {
@@ -279,6 +280,17 @@ func checkIncusReachable() checkResult {
 }
 
 func checkVsock() checkResult {
+	// vsock is VM-only — needed for the Incus agent in a VM guest. If no
+	// VM-isolated incus runners are tracked, skip the check entirely so a
+	// container-only fleet doesn't get a permanent warn for an unused module.
+	// Windows runners are always Incus VMs, so they count too.
+	if !anyVMIncusRunner() {
+		return checkResult{
+			status: statusSkip,
+			name:   "vhost-vsock available",
+			detail: "no VM-isolated incus runners tracked; check skipped",
+		}
+	}
 	if _, err := os.Stat("/dev/vhost-vsock"); err == nil {
 		return checkResult{status: statusOK, name: "vhost-vsock available"}
 	}
@@ -288,6 +300,20 @@ func checkVsock() checkResult {
 		detail: "/dev/vhost-vsock missing; Incus VMs need this for the agent",
 		fix:    "sudo modprobe vhost_vsock  &&  echo vhost_vsock | sudo tee /etc/modules-load.d/vsock.conf",
 	}
+}
+
+func anyVMIncusRunner() bool {
+	runners, _ := state.All()
+	for i := range runners {
+		r := &runners[i]
+		if r.Kind == "windows" {
+			return true
+		}
+		if r.Kind == "linux" && r.EffectiveIsolation() == "vm" {
+			return true
+		}
+	}
+	return false
 }
 
 func checkAuth() checkResult {
